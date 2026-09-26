@@ -8,10 +8,9 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import android.util.LruCache
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -19,6 +18,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -62,9 +62,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -76,6 +79,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.pluralStringResource
@@ -92,7 +96,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.dwk.yumgo.R
 import com.dwk.yumgo.theme.YumgoTheme
-import java.io.ByteArrayInputStream
 import java.io.File
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -102,40 +105,55 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Fridge screen. Owns status, cutout, and navigation insets. Expects no ancestor
- * safe-drawing padding. [cameraContent] is supplied by the caller and replaces
- * this surface, including the editor sheet, until [FridgeUiState.cameraOpen] is
- * false again. The draft itself is left untouched.
+ * Fridge screen. Owns status, cutout, navigation, and keyboard insets. Expects no
+ * ancestor safe-drawing padding. [snackbarHost] is placed above Add and the keyboard.
+ * [cameraContent] cross-fades over this surface while [FridgeUiState.cameraOpen] is
+ * true. The draft stays in [state] and the editor returns already open, without
+ * sliding up again or opening the keyboard.
  */
 @Composable
 fun FridgeContent(
   state: FridgeUiState,
   callbacks: FridgeCallbacks,
   modifier: Modifier = Modifier,
+  snackbarHost: @Composable () -> Unit = {},
   cameraContent: @Composable () -> Unit = {},
 ) {
-  val transition = updateTransition(targetState = state.cameraOpen, label = "camera")
-  val cameraOnScreen = transition.currentState || transition.targetState
+  var restoreEditor by remember { mutableStateOf(false) }
+  SideEffect {
+    if (state.cameraOpen && state.draft != null) restoreEditor = true
+    if (state.draft == null) restoreEditor = false
+  }
   val cameraFade = motionEffects<Float>()
-  val cameraSlide = motionSpatial<IntOffset>()
-  Box(modifier.fillMaxSize()) {
-    if (!cameraOnScreen) {
-      FridgeScaffold(state = state, callbacks = callbacks)
-      state.draft?.let { draft -> ItemEditor(draft = draft, callbacks = callbacks) }
-    }
-    transition.AnimatedVisibility(
-      visible = { open -> open },
-      enter = fadeIn(cameraFade) + slideInVertically(cameraSlide) { it / 8 },
-      exit = fadeOut(cameraFade) + slideOutVertically(cameraSlide) { it / 8 },
-    ) {
+  AnimatedContent(
+    targetState = state.cameraOpen,
+    modifier = modifier.fillMaxSize(),
+    transitionSpec = { fadeIn(cameraFade) togetherWith fadeOut(cameraFade) },
+    label = "camera",
+  ) { camera ->
+    if (camera) {
       Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) { cameraContent() }
+    } else {
+      Box(Modifier.fillMaxSize()) {
+        FridgeScaffold(state = state, callbacks = callbacks, snackbarHost = snackbarHost)
+        state.draft?.let { draft ->
+          ItemEditor(draft = draft, callbacks = callbacks, restored = restoreEditor || state.cameraOpen)
+        }
+      }
     }
   }
 }
 
 @Composable
-private fun FridgeScaffold(state: FridgeUiState, callbacks: FridgeCallbacks) {
-  val screenInsets = WindowInsets.safeDrawing.exclude(WindowInsets.ime)
+private fun FridgeScaffold(
+  state: FridgeUiState,
+  callbacks: FridgeCallbacks,
+  snackbarHost: @Composable () -> Unit,
+) {
+  val density = LocalDensity.current
+  val imeBottom = WindowInsets.ime.getBottom(density)
+  val screenInsets =
+    WindowInsets.safeDrawing.exclude(WindowInsets.ime).union(WindowInsets(bottom = imeBottom))
   val layoutDirection = LocalLayoutDirection.current
   val fade = motionEffects<Float>()
   val place = motionSpatial<IntOffset>()
@@ -157,6 +175,7 @@ private fun FridgeScaffold(state: FridgeUiState, callbacks: FridgeCallbacks) {
     containerColor = MaterialTheme.colorScheme.background,
     contentColor = MaterialTheme.colorScheme.onBackground,
     contentWindowInsets = screenInsets,
+    snackbarHost = snackbarHost,
     topBar = { FridgeHeader(state = state, useSoon = useSoon, callbacks = callbacks) },
     floatingActionButton = {
       ExtendedFloatingActionButton(
@@ -372,9 +391,10 @@ private fun SectionHeader(group: ExpiryGroup, modifier: Modifier = Modifier) {
 
 @Composable
 private fun FridgeCard(item: FridgeItemUi, callbacks: FridgeCallbacks, modifier: Modifier = Modifier) {
+  val editLabel = stringResource(R.string.fridge_edit_item)
   Surface(
-    onClick = { callbacks.onEdit(item.id) },
-    modifier = modifier.fillMaxWidth(),
+    modifier =
+      modifier.fillMaxWidth().clickable(onClickLabel = editLabel) { callbacks.onEdit(item.id) },
     shape = MaterialTheme.shapes.large,
     color = MaterialTheme.colorScheme.surfaceContainerLowest,
   ) {
@@ -475,14 +495,20 @@ internal fun FridgeThumbnail(name: String, photoReference: String?, modifier: Mo
 @Composable
 private fun rememberThumbnail(reference: String?): ImageBitmap? {
   val context = LocalContext.current
+  val cached = if (reference.isNullOrBlank()) null else ThumbnailCache.get(reference)
   val bitmap by
-    produceState<ImageBitmap?>(initialValue = null, reference) {
-      value =
-        if (reference.isNullOrBlank()) {
-          null
-        } else {
-          withContext(Dispatchers.IO) { runCatching { decodeThumbnail(context, reference) }.getOrNull() }
-        }
+    produceState(initialValue = cached, reference) {
+      if (reference.isNullOrBlank()) {
+        value = null
+        return@produceState
+      }
+      ThumbnailCache.get(reference)?.let {
+        value = it
+        return@produceState
+      }
+      val decoded = withContext(Dispatchers.IO) { runCatching { decodeThumbnail(context, reference) }.getOrNull() }
+      if (decoded != null) ThumbnailCache.put(reference, decoded)
+      value = decoded
     }
   return bitmap
 }
@@ -569,6 +595,7 @@ private const val MaxQuantity = 99
 
 internal val FridgePlus: ImageVector by lazy { fridgeIcon("Plus") { plus() } }
 internal val FridgeMinus: ImageVector by lazy { fridgeIcon("Minus") { minus() } }
+internal val FridgeMore: ImageVector by lazy { fridgeIcon("More") { moreVert() } }
 private val FridgeSearch: ImageVector by lazy { fridgeIcon("Search") { search() } }
 private val FridgeClose: ImageVector by lazy { fridgeIcon("Close") { dismiss() } }
 
@@ -621,6 +648,27 @@ private fun androidx.compose.ui.graphics.vector.PathBuilder.search() {
   close()
 }
 
+private fun androidx.compose.ui.graphics.vector.PathBuilder.moreVert() {
+  moveTo(12f, 8f)
+  curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
+  reflectiveCurveToRelative(-0.9f, -2f, -2f, -2f)
+  reflectiveCurveToRelative(-2f, 0.9f, -2f, 2f)
+  reflectiveCurveToRelative(0.9f, 2f, 2f, 2f)
+  close()
+  moveTo(12f, 10f)
+  curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
+  reflectiveCurveToRelative(0.9f, 2f, 2f, 2f)
+  reflectiveCurveToRelative(2f, -0.9f, 2f, -2f)
+  reflectiveCurveToRelative(-0.9f, -2f, -2f, -2f)
+  close()
+  moveTo(12f, 16f)
+  curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
+  reflectiveCurveToRelative(0.9f, 2f, 2f, 2f)
+  reflectiveCurveToRelative(2f, -0.9f, 2f, -2f)
+  reflectiveCurveToRelative(-0.9f, -2f, -2f, -2f)
+  close()
+}
+
 private fun androidx.compose.ui.graphics.vector.PathBuilder.dismiss() {
   moveTo(19f, 6.41f)
   lineTo(17.59f, 5f)
@@ -637,38 +685,91 @@ private fun androidx.compose.ui.graphics.vector.PathBuilder.dismiss() {
   close()
 }
 
-private fun decodeThumbnail(context: Context, reference: String): ImageBitmap? {
-  val bytes = readPhotoBytes(context, reference) ?: return null
-  if (bytes.isEmpty() || bytes.size > MaxPhotoBytes) return null
-  val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-  BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-  if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-  val decoded =
-    BitmapFactory.decodeByteArray(
-      bytes,
-      0,
-      bytes.size,
-      BitmapFactory.Options().apply { inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, 256) },
-    ) ?: return null
-  val rotation =
-    runCatching {
-      ExifInterface(ByteArrayInputStream(bytes)).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-    }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-  return rotate(decoded, rotationDegrees(rotation)).asImageBitmap()
+private object ThumbnailCache {
+  private val lru =
+    object : LruCache<String, ImageBitmap>(4 * 1024) {
+      override fun sizeOf(key: String, value: ImageBitmap): Int =
+        (value.width * value.height * 4 / 1024).coerceAtLeast(1)
+    }
+
+  fun get(key: String): ImageBitmap? = lru.get(key)
+
+  fun put(key: String, value: ImageBitmap) {
+    lru.put(key, value)
+  }
 }
 
-private fun readPhotoBytes(context: Context, reference: String): ByteArray? {
+private fun decodeThumbnail(context: Context, reference: String): ImageBitmap? {
   val uri =
     when {
       reference.startsWith("content:") || reference.startsWith("file:") -> Uri.parse(reference)
       else -> null
     }
-  return if (uri != null) {
-    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-  } else {
-    val file = File(reference)
-    if (file.isFile) file.readBytes() else null
-  }
+  return if (uri != null) decodeUri(context, uri) else decodeFile(File(reference))
+}
+
+private fun decodeFile(file: File): ImageBitmap? {
+  if (!file.isFile) return null
+  val length = file.length()
+  if (length <= 0L || length > MaxPhotoBytes) return null
+  return decodeSampled(
+    bounds = {
+      val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+      BitmapFactory.decodeFile(file.absolutePath, options)
+      options
+    },
+    decode = { sample ->
+      BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
+    },
+    orientation = {
+      runCatching {
+        ExifInterface(file.absolutePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+      }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+    },
+  )
+}
+
+private fun decodeUri(context: Context, uri: Uri): ImageBitmap? {
+  val resolver = context.contentResolver
+  val size = resolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: return null
+  if (size > MaxPhotoBytes) return null
+  return decodeSampled(
+    bounds = {
+      resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFileDescriptor(descriptor.fileDescriptor, null, options)
+        options
+      } ?: BitmapFactory.Options()
+    },
+    decode = { sample ->
+      resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+        BitmapFactory.decodeFileDescriptor(
+          descriptor.fileDescriptor,
+          null,
+          BitmapFactory.Options().apply { inSampleSize = sample },
+        )
+      }
+    },
+    orientation = {
+      resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+        runCatching {
+          ExifInterface(descriptor.fileDescriptor)
+            .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+      } ?: ExifInterface.ORIENTATION_NORMAL
+    },
+  )
+}
+
+private fun decodeSampled(
+  bounds: () -> BitmapFactory.Options,
+  decode: (Int) -> Bitmap?,
+  orientation: () -> Int,
+): ImageBitmap? {
+  val measured = bounds()
+  if (measured.outWidth <= 0 || measured.outHeight <= 0) return null
+  val decoded = decode(sampleSize(measured.outWidth, measured.outHeight, 256)) ?: return null
+  return rotate(decoded, rotationDegrees(orientation())).asImageBitmap()
 }
 
 private fun sampleSize(width: Int, height: Int, maxEdge: Int): Int {

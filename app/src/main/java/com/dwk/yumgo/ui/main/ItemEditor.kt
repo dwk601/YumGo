@@ -7,14 +7,24 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -30,9 +40,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -59,29 +71,66 @@ import java.time.ZoneOffset
  * and writes it back onto [draft].
  */
 @Composable
-fun ItemEditor(draft: ItemDraft, callbacks: FridgeCallbacks, modifier: Modifier = Modifier) {
-  ModalBottomSheet(
-    onDismissRequest = { if (!draft.saving) callbacks.onDismissEditor() },
-    modifier = modifier,
-    sheetGesturesEnabled = !draft.saving,
-    shape = MaterialTheme.shapes.extraLarge,
-    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-    contentColor = MaterialTheme.colorScheme.onSurface,
-  ) {
-    EditorBody(draft = draft, callbacks = callbacks)
+fun ItemEditor(
+  draft: ItemDraft,
+  callbacks: FridgeCallbacks,
+  restored: Boolean = false,
+  modifier: Modifier = Modifier,
+) {
+  val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  if (restored) {
+    RestoredEditor(draft = draft, callbacks = callbacks, modifier = modifier)
+  } else {
+    ModalBottomSheet(
+      onDismissRequest = { if (!draft.saving) callbacks.onDismissEditor() },
+      modifier = modifier,
+      sheetState = sheetState,
+      sheetGesturesEnabled = !draft.saving,
+      shape = MaterialTheme.shapes.extraLarge,
+      containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+      contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+      EditorBody(draft = draft, callbacks = callbacks, requestFocus = true)
+    }
   }
 }
 
 @Composable
-private fun EditorBody(draft: ItemDraft, callbacks: FridgeCallbacks) {
+private fun RestoredEditor(draft: ItemDraft, callbacks: FridgeCallbacks, modifier: Modifier = Modifier) {
+  Box(modifier.fillMaxSize()) {
+    Box(
+      Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f)).clickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = null,
+        onClick = { if (!draft.saving) callbacks.onDismissEditor() },
+      ),
+    )
+    Surface(
+      modifier =
+        Modifier.align(Alignment.BottomCenter).fillMaxWidth().windowInsetsPadding(
+          WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
+        ),
+      shape = MaterialTheme.shapes.extraLarge,
+      color = MaterialTheme.colorScheme.surfaceContainerLow,
+      contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+      EditorBody(draft = draft, callbacks = callbacks, requestFocus = false)
+    }
+  }
+}
+
+@Composable
+private fun EditorBody(draft: ItemDraft, callbacks: FridgeCallbacks, requestFocus: Boolean) {
   val focus = remember { FocusRequester() }
   val keyboard = LocalSoftwareKeyboardController.current
   val scroll = rememberScrollState()
   var pickingDate by rememberSaveable { mutableStateOf(false) }
   val canSave = draft.name.isNotBlank() && !draft.saving
-  LaunchedEffect(draft.id) {
-    focus.requestFocus()
-    keyboard?.show()
+  LaunchedEffect(draft.id, requestFocus) {
+    if (requestFocus) {
+      focus.requestFocus()
+      keyboard?.show()
+    }
   }
 
   BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -208,7 +257,7 @@ private fun PhotoRow(draft: ItemDraft, callbacks: FridgeCallbacks) {
     )
   }
   ButtonGroup(overflowIndicator = { menu ->
-    IconButton(onClick = { menu.show() }, enabled = !draft.saving) { Icon(FridgePlus, contentDescription = more) }
+    IconButton(onClick = { menu.show() }, enabled = !draft.saving) { Icon(FridgeMore, contentDescription = more) }
   }, modifier = Modifier.fillMaxWidth(), expandedRatio = 0f) {
     clickableItem(onClick = callbacks.onTakePhoto, label = take, weight = 1f, enabled = !draft.saving)
     clickableItem(onClick = callbacks.onPickPhoto, label = pick, weight = 1f, enabled = !draft.saving)

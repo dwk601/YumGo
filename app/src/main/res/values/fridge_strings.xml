@@ -25,6 +25,7 @@
     <string name="fridge_decrease_quantity">Decrease quantity of %1$s</string>
     <string name="fridge_increase_quantity">Increase quantity of %1$s</string>
     <string name="fridge_quantity">Quantity %1$d</string>
+    <string name="fridge_edit_item">Edit item</string>
     <string name="fridge_item_expired">Expired %1$s</string>
     <string name="fridge_item_today">Today</string>
     <string name="fridge_item_tomorrow">Tomorrow</string>
@@ -38,8 +39,8 @@
     <string name="editor_quantity_label">Quantity</string>
     <string name="editor_expiry_label">Expiry</string>
     <string name="editor_expiry_none">No expiry</string>
-    <string name="editor_expiry_choose">Choose date</string>
-    <string name="editor_expiry_clear">Clear expiry</string>
+    <string name="editor_expiry_choose">Choose expiry date</string>
+    <string name="editor_expiry_clear">Clear expiry date</string>
     <string name="editor_photo_label">Photo</string>
     <string name="editor_photo_empty">Optional. You can keep typing without one.</string>
     <string name="editor_take_photo">Take photo</string>
