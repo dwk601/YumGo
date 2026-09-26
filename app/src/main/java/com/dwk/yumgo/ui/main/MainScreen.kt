@@ -10,9 +10,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.dwk.yumgo.R
 import com.dwk.yumgo.data.OfflineFridgeRepository
 import com.dwk.yumgo.data.PhotoStore
 import com.dwk.yumgo.ui.photo.PhotoCapture
@@ -20,11 +22,13 @@ import com.dwk.yumgo.ui.photo.rememberPhotoPicker
 
 /**
  * Fridge destination. One [OfflineFridgeRepository] and one [PhotoStore] are created
- * with the first ViewModel and reused for the life of that screen, including rotation.
+ * with the first ViewModel and reused for the life of that screen, including rotation
+ * and the trip to Settings and back.
  */
 @Composable
 fun MainScreen(
   modifier: Modifier = Modifier,
+  onOpenSettings: () -> Unit = {},
   viewModel: MainScreenViewModel = fridgeViewModel(),
 ) {
   val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -32,16 +36,20 @@ fun MainScreen(
   val snackbar = remember { SnackbarHostState() }
   val context = LocalContext.current.applicationContext
   val photos = remember(viewModel) { PhotoStoreHolder.photos(context) }
+  val undoLabel = stringResource(R.string.fridge_undo)
+  val pending = pendingUndo
+  val pendingId = pending?.id
+  val removed = pending?.let { stringResource(R.string.fridge_removed, it.name) }
   val pickPhoto =
     rememberPhotoPicker(photoStore = photos) { result ->
       viewModel.onAcquisition(result)
     }
-  LaunchedEffect(pendingUndo?.id) {
-    val pending = pendingUndo ?: return@LaunchedEffect
-    val result = snackbar.showSnackbar(message = "${pending.name} removed", actionLabel = "Undo")
+  LaunchedEffect(pendingId, removed) {
+    if (pendingId == null) return@LaunchedEffect
+    val result = snackbar.showSnackbar(message = removed.orEmpty(), actionLabel = undoLabel)
     when (result) {
-      SnackbarResult.ActionPerformed -> viewModel.confirmUndo(pending.id)
-      SnackbarResult.Dismissed -> viewModel.dismissUndo(pending.id)
+      SnackbarResult.ActionPerformed -> viewModel.confirmUndo(pendingId)
+      SnackbarResult.Dismissed -> viewModel.dismissUndo(pendingId)
     }
   }
   LaunchedEffect(viewModel) {
@@ -64,6 +72,7 @@ fun MainScreen(
         pickPhoto()
       },
       onRemovePhoto = viewModel::onRemovePhoto,
+      onOpenSettings = onOpenSettings,
     )
   FridgeContent(
     state = state,
@@ -87,6 +96,7 @@ private fun fridgeViewModel(): MainScreenViewModel {
     MainScreenViewModel(
       repository = PhotoStoreHolder.repository(appContext),
       photos = PhotoStoreHolder.photos(appContext),
+      appContext = appContext,
       savedState = createSavedStateHandle(),
     )
   }

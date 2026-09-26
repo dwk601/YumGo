@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
@@ -43,6 +44,8 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -289,13 +292,21 @@ private fun FridgeHeader(state: FridgeUiState, useSoon: Int, callbacks: FridgeCa
       .windowInsetsPadding(headerInsets)
       .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 12.dp),
   ) {
-    Text(text = stringResource(R.string.fridge_title), style = MaterialTheme.typography.headlineLarge)
-    Text(
-      text = subtitle,
-      style = MaterialTheme.typography.bodyMedium,
-      color = if (useSoon > 0) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
-      modifier = Modifier.padding(top = 2.dp, bottom = 16.dp),
-    )
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+      Column(Modifier.weight(1f)) {
+        Text(text = stringResource(R.string.fridge_title), style = MaterialTheme.typography.headlineLarge)
+        Text(
+          text = subtitle,
+          style = MaterialTheme.typography.bodyMedium,
+          color =
+            if (useSoon > 0) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(top = 2.dp, bottom = 16.dp),
+        )
+      }
+      IconButton(onClick = callbacks.onOpenSettings) {
+        Icon(FridgeSettings, contentDescription = stringResource(R.string.fridge_settings))
+      }
+    }
     OutlinedTextField(
       value = state.query,
       onValueChange = callbacks.onQueryChange,
@@ -325,6 +336,10 @@ private fun FridgeHeader(state: FridgeUiState, useSoon: Int, callbacks: FridgeCa
   }
 }
 
+/**
+ * Full-pane message for loading, error, empty, and no-results. Scrolls so the copy and the
+ * action stay reachable on a short landscape window or at 200% text.
+ */
 @Composable
 private fun FridgeMessage(
   innerPadding: PaddingValues,
@@ -335,23 +350,32 @@ private fun FridgeMessage(
 ) {
   Column(
     modifier =
-      Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 32.dp).padding(bottom = 72.dp),
+      Modifier
+        .fillMaxSize()
+        .padding(innerPadding)
+        .verticalScroll(rememberScrollState())
+        .padding(start = 32.dp, end = 32.dp, top = 24.dp, bottom = 88.dp),
     verticalArrangement = Arrangement.Center,
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
     if (showLoading) {
       LoadingIndicator(Modifier.padding(bottom = 20.dp).size(72.dp))
     }
-    Text(text = title, style = MaterialTheme.typography.headlineSmall)
+    Text(
+      text = title,
+      style = MaterialTheme.typography.headlineSmall,
+      textAlign = TextAlign.Center,
+    )
     if (!body.isNullOrBlank()) {
       Text(
         text = body,
         style = MaterialTheme.typography.bodyLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
         modifier = Modifier.padding(top = 8.dp),
       )
     }
-    Box(Modifier.padding(top = 8.dp)) { action() }
+    Box(Modifier.padding(top = 12.dp).heightIn(min = 48.dp)) { action() }
   }
 }
 
@@ -374,7 +398,7 @@ private fun ErrorBanner(message: String?, onRetry: () -> Unit, modifier: Modifie
           )
         }
       }
-      TextButton(onClick = onRetry) { Text(stringResource(R.string.fridge_retry)) }
+      TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.fridge_retry)) }
     }
   }
 }
@@ -408,8 +432,13 @@ private fun FridgeCard(item: FridgeItemUi, callbacks: FridgeCallbacks, modifier:
   ) {
     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
       FridgeThumbnail(name = item.name, photoReference = item.photoReference)
-      Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-        Text(text = item.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Column(Modifier.weight(1f).padding(start = 12.dp, end = 8.dp)) {
+        Text(
+          text = item.name,
+          style = MaterialTheme.typography.titleMedium,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
         Text(
           text = fridgeExpiryLabel(item.expiryEpochDay),
           style = MaterialTheme.typography.bodySmall,
@@ -606,9 +635,12 @@ private const val MaxQuantity = 99
 
 internal val FridgePlus: ImageVector by lazy { fridgeIcon("Plus") { plus() } }
 internal val FridgeMinus: ImageVector by lazy { fridgeIcon("Minus") { minus() } }
-internal val FridgeMore: ImageVector by lazy { fridgeIcon("More") { moreVert() } }
+internal val FridgeClose: ImageVector by lazy { fridgeIcon("Close") { dismiss() } }
+internal val FridgeCalendar: ImageVector by lazy { fridgeIcon("Calendar") { calendar() } }
+internal val FridgeDelete: ImageVector by lazy { fridgeIcon("Delete") { delete() } }
+internal val FridgeCheck: ImageVector by lazy { fridgeIcon("Check") { check() } }
 private val FridgeSearch: ImageVector by lazy { fridgeIcon("Search") { search() } }
-private val FridgeClose: ImageVector by lazy { fridgeIcon("Close") { dismiss() } }
+private val FridgeSettings: ImageVector by lazy { fridgeIcon("Settings") { settings() } }
 
 private fun fridgeIcon(name: String, draw: androidx.compose.ui.graphics.vector.PathBuilder.() -> Unit): ImageVector =
   ImageVector.Builder(name = name, defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
@@ -659,27 +691,6 @@ private fun androidx.compose.ui.graphics.vector.PathBuilder.search() {
   close()
 }
 
-private fun androidx.compose.ui.graphics.vector.PathBuilder.moreVert() {
-  moveTo(12f, 8f)
-  curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
-  reflectiveCurveToRelative(-0.9f, -2f, -2f, -2f)
-  reflectiveCurveToRelative(-2f, 0.9f, -2f, 2f)
-  reflectiveCurveToRelative(0.9f, 2f, 2f, 2f)
-  close()
-  moveTo(12f, 10f)
-  curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
-  reflectiveCurveToRelative(0.9f, 2f, 2f, 2f)
-  reflectiveCurveToRelative(2f, -0.9f, 2f, -2f)
-  reflectiveCurveToRelative(-0.9f, -2f, -2f, -2f)
-  close()
-  moveTo(12f, 16f)
-  curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
-  reflectiveCurveToRelative(0.9f, 2f, 2f, 2f)
-  reflectiveCurveToRelative(2f, -0.9f, 2f, -2f)
-  reflectiveCurveToRelative(-0.9f, -2f, -2f, -2f)
-  close()
-}
-
 private fun androidx.compose.ui.graphics.vector.PathBuilder.dismiss() {
   moveTo(19f, 6.41f)
   lineTo(17.59f, 5f)
@@ -693,6 +704,87 @@ private fun androidx.compose.ui.graphics.vector.PathBuilder.dismiss() {
   lineTo(17.59f, 19f)
   lineTo(19f, 17.59f)
   lineTo(13.41f, 12f)
+  close()
+}
+
+private fun androidx.compose.ui.graphics.vector.PathBuilder.check() {
+  moveTo(9f, 16.17f)
+  lineTo(4.83f, 12f)
+  lineTo(3.41f, 13.41f)
+  lineTo(9f, 19f)
+  lineTo(21f, 7f)
+  lineTo(19.59f, 5.59f)
+  close()
+}
+
+private fun androidx.compose.ui.graphics.vector.PathBuilder.calendar() {
+  moveTo(19f, 3f)
+  lineTo(18f, 3f)
+  lineTo(18f, 1f)
+  lineTo(16f, 1f)
+  lineTo(16f, 3f)
+  lineTo(8f, 3f)
+  lineTo(8f, 1f)
+  lineTo(6f, 1f)
+  lineTo(6f, 3f)
+  lineTo(5f, 3f)
+  curveTo(3.89f, 3f, 3f, 3.9f, 3f, 5f)
+  lineTo(3f, 19f)
+  curveTo(3f, 20.1f, 3.9f, 21f, 5f, 21f)
+  lineTo(19f, 21f)
+  curveTo(20.1f, 21f, 21f, 20.1f, 21f, 19f)
+  lineTo(21f, 5f)
+  curveTo(21f, 3.9f, 20.1f, 3f, 19f, 3f)
+  close()
+  moveTo(19f, 8f)
+  lineTo(5f, 8f)
+  lineTo(5f, 19f)
+  lineTo(19f, 19f)
+  lineTo(19f, 8f)
+  close()
+}
+
+private fun androidx.compose.ui.graphics.vector.PathBuilder.delete() {
+  moveTo(6f, 19f)
+  curveTo(6f, 20.1f, 6.9f, 21f, 8f, 21f)
+  lineTo(16f, 21f)
+  curveTo(17.1f, 21f, 18f, 20.1f, 18f, 19f)
+  lineTo(18f, 7f)
+  lineTo(6f, 7f)
+  lineTo(6f, 19f)
+  close()
+  moveTo(19f, 4f)
+  lineTo(15.5f, 4f)
+  lineTo(14.5f, 3f)
+  lineTo(9.5f, 3f)
+  lineTo(8.5f, 4f)
+  lineTo(5f, 4f)
+  lineTo(5f, 6f)
+  lineTo(19f, 6f)
+  lineTo(19f, 4f)
+  close()
+}
+
+/** Three labelled sliders. Same-direction rectangles merge under the non-zero fill rule. */
+private fun androidx.compose.ui.graphics.vector.PathBuilder.settings() {
+  rectangle(3f, 5f, 21f, 7f)
+  rectangle(9f, 3f, 15f, 9f)
+  rectangle(3f, 11f, 21f, 13f)
+  rectangle(15f, 9f, 21f, 15f)
+  rectangle(3f, 17f, 21f, 19f)
+  rectangle(6f, 15f, 12f, 21f)
+}
+
+private fun androidx.compose.ui.graphics.vector.PathBuilder.rectangle(
+  left: Float,
+  top: Float,
+  right: Float,
+  bottom: Float,
+) {
+  moveTo(left, top)
+  lineTo(right, top)
+  lineTo(right, bottom)
+  lineTo(left, bottom)
   close()
 }
 

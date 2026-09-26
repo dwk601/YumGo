@@ -34,10 +34,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -63,9 +68,14 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -557,20 +567,39 @@ private fun BoxScope.CaptureBar(
     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
   ) {
-    Column(Modifier.windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 20.dp, vertical = 12.dp)) {
+    Column(Modifier.windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 12.dp, vertical = 12.dp)) {
       if (errorText != null) {
-        Text(text = errorText, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+        Text(
+          text = errorText,
+          color = MaterialTheme.colorScheme.error,
+          style = MaterialTheme.typography.bodyMedium,
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
       }
       Row(
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
       ) {
-        TextButton(onClick = onCancel, modifier = Modifier.testTag("photo_cancel")) { Text(stringResource(R.string.photo_cancel)) }
-        if (secondaryLabel != null && secondaryTag != null && onSecondary != null) {
-          TextButton(onClick = onSecondary, modifier = Modifier.testTag(secondaryTag)) { Text(secondaryLabel) }
+        IconButton(onClick = onCancel, modifier = Modifier.testTag("photo_cancel")) {
+          Icon(PhotoClose, contentDescription = stringResource(R.string.photo_cancel))
         }
-        Button(onClick = onPrimary, enabled = primaryEnabled, modifier = Modifier.testTag(primaryTag)) { Text(primaryLabel) }
+        if (secondaryLabel != null && onSecondary != null) {
+          TextButton(
+            onClick = onSecondary,
+            modifier = Modifier.heightIn(min = 48.dp).testTag(secondaryTag.orEmpty()),
+          ) {
+            Text(secondaryLabel)
+          }
+        }
+        Button(
+          onClick = onPrimary,
+          enabled = primaryEnabled,
+          modifier = Modifier.weight(1f).padding(start = 8.dp).heightIn(min = 52.dp).testTag(primaryTag),
+          shape = MaterialTheme.shapes.extraLarge,
+        ) {
+          Text(primaryLabel, textAlign = TextAlign.Center)
+        }
       }
     }
   }
@@ -585,13 +614,27 @@ private fun Explanation(
   onTypeInstead: () -> Unit,
 ) {
   Column(
-    modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(24.dp),
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .windowInsetsPadding(WindowInsets.safeDrawing)
+        .verticalScroll(rememberScrollState())
+        .padding(24.dp),
     verticalArrangement = Arrangement.Center,
   ) {
     Text(text = message, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-    Button(onClick = onPrimary, modifier = Modifier.padding(top = 20.dp).testTag(primaryTag)) { Text(primary) }
-    TextButton(onClick = onTypeInstead, modifier = Modifier.padding(top = 8.dp).testTag("photo_type_instead")) {
-      Text(stringResource(R.string.photo_type_instead))
+    Button(
+      onClick = onPrimary,
+      modifier = Modifier.padding(top = 20.dp).heightIn(min = 52.dp).fillMaxWidth().testTag(primaryTag),
+      shape = MaterialTheme.shapes.extraLarge,
+    ) {
+      Text(primary, textAlign = TextAlign.Center)
+    }
+    TextButton(
+      onClick = onTypeInstead,
+      modifier = Modifier.padding(top = 8.dp).heightIn(min = 48.dp).fillMaxWidth().testTag("photo_type_instead"),
+    ) {
+      Text(stringResource(R.string.photo_type_instead), modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
     }
   }
 }
@@ -686,3 +729,26 @@ private fun applyExifOrientation(bitmap: Bitmap, file: File): Bitmap {
 }
 
 private const val MAX_REVIEW_EDGE = 1600
+
+/** Cancel glyph. Kept here so the photo package does not depend on the fridge package. */
+private val PhotoClose: ImageVector by lazy {
+  ImageVector.Builder(name = "Close", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
+    .apply {
+      path(fill = SolidColor(Color.Black)) {
+        moveTo(19f, 6.41f)
+        lineTo(17.59f, 5f)
+        lineTo(12f, 10.59f)
+        lineTo(6.41f, 5f)
+        lineTo(5f, 6.41f)
+        lineTo(10.59f, 12f)
+        lineTo(5f, 17.59f)
+        lineTo(6.41f, 19f)
+        lineTo(12f, 13.41f)
+        lineTo(17.59f, 19f)
+        lineTo(19f, 17.59f)
+        lineTo(13.41f, 12f)
+        close()
+      }
+    }
+    .build()
+}

@@ -1,4 +1,8 @@
-@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@file:OptIn(
+  ExperimentalLayoutApi::class,
+  ExperimentalMaterial3Api::class,
+  ExperimentalMaterial3ExpressiveApi::class,
+)
 
 package com.dwk.yumgo.ui.main
 
@@ -10,9 +14,12 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -24,6 +31,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -31,15 +40,17 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonGroup
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -228,7 +239,18 @@ private fun EditorBody(
         PhotoRow(draft = draft, callbacks = callbacks)
         Spacer(Modifier.height(8.dp))
         if (draft.id != null) {
-          TextButton(onClick = { callbacks.onDelete(draft.id) }, enabled = !draft.saving) {
+          TextButton(
+            onClick = { callbacks.onDelete(draft.id) },
+            enabled = !draft.saving,
+            modifier = Modifier.heightIn(min = 48.dp),
+          ) {
+            Icon(
+              FridgeDelete,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
             Text(stringResource(R.string.editor_delete), color = MaterialTheme.colorScheme.error)
           }
         }
@@ -245,7 +267,12 @@ private fun EditorBody(
           transitionSpec = { fadeIn(saveFade) togetherWith fadeOut(saveFade) },
           label = "save",
         ) { saving ->
-          Text(stringResource(if (saving) R.string.editor_saving else R.string.editor_save))
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (saving) {
+              LoadingIndicator(modifier = Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary)
+            }
+            Text(stringResource(if (saving) R.string.editor_saving else R.string.editor_save))
+          }
         }
       }
     }
@@ -263,22 +290,45 @@ private fun EditorBody(
   }
 }
 
+/**
+ * Expiry label, value, and actions stack instead of sharing one line, so a long date and two
+ * labelled actions reflow on a narrow window or at large text instead of squeezing each other.
+ */
 @Composable
 private fun ExpiryRow(draft: ItemDraft, enabled: Boolean, onPick: () -> Unit, onClear: () -> Unit) {
-  Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-    Column(Modifier.weight(1f)) {
-      Text(text = stringResource(R.string.editor_expiry_label), style = MaterialTheme.typography.labelLarge)
+  val epochDay = draft.expiryEpochDay
+  val fade = motionFade<Float>()
+  Column(Modifier.fillMaxWidth()) {
+    Text(text = stringResource(R.string.editor_expiry_label), style = MaterialTheme.typography.labelLarge)
+    AnimatedContent(
+      targetState = epochDay,
+      transitionSpec = { fadeIn(fade) togetherWith fadeOut(fade) },
+      label = "expiry-value",
+    ) { day ->
       Text(
-        text = fridgeExpiryLabel(draft.expiryEpochDay),
+        text = fridgeExpiryLabel(day),
         style = MaterialTheme.typography.titleMedium,
-        color = fridgeExpiryColor(draft.expiryEpochDay),
-        modifier = Modifier.padding(top = 2.dp),
+        color = fridgeExpiryColor(day),
+        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
       )
     }
-    if (draft.expiryEpochDay != null) {
-      TextButton(onClick = onClear, enabled = enabled) { Text(stringResource(R.string.editor_expiry_clear)) }
+    FlowRow(
+      modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      TextButton(onClick = onPick, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) {
+        Icon(FridgeCalendar, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+        Text(stringResource(R.string.editor_expiry_choose))
+      }
+      if (epochDay != null) {
+        TextButton(onClick = onClear, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) {
+          Icon(FridgeClose, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+          Text(stringResource(R.string.editor_expiry_clear))
+        }
+      }
     }
-    TextButton(onClick = onPick, enabled = enabled) { Text(stringResource(R.string.editor_expiry_choose)) }
   }
 }
 
@@ -286,7 +336,6 @@ private fun ExpiryRow(draft: ItemDraft, enabled: Boolean, onPick: () -> Unit, on
 private fun PhotoRow(draft: ItemDraft, callbacks: FridgeCallbacks) {
   val take = stringResource(R.string.editor_take_photo)
   val pick = stringResource(R.string.editor_pick_photo)
-  val more = stringResource(R.string.editor_more_photo_actions)
   Text(text = stringResource(R.string.editor_photo_label), style = MaterialTheme.typography.labelLarge)
   if (draft.photoReference != null) {
     FridgeThumbnail(
@@ -294,8 +343,19 @@ private fun PhotoRow(draft: ItemDraft, callbacks: FridgeCallbacks) {
       photoReference = draft.photoReference,
       modifier = Modifier.padding(top = 8.dp),
     )
-    TextButton(onClick = callbacks.onRemovePhoto, enabled = !draft.saving) {
-      Text(stringResource(R.string.editor_remove_photo))
+    TextButton(
+      onClick = callbacks.onRemovePhoto,
+      enabled = !draft.saving,
+      modifier = Modifier.heightIn(min = 48.dp),
+    ) {
+      Icon(
+        FridgeDelete,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.error,
+        modifier = Modifier.size(18.dp),
+      )
+      Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+      Text(stringResource(R.string.editor_remove_photo), color = MaterialTheme.colorScheme.error)
     }
   } else {
     Text(
@@ -305,19 +365,40 @@ private fun PhotoRow(draft: ItemDraft, callbacks: FridgeCallbacks) {
       modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
     )
   }
-  ButtonGroup(overflowIndicator = { menu ->
-    IconButton(onClick = { menu.show() }, enabled = !draft.saving) { Icon(FridgeMore, contentDescription = more) }
-  }, modifier = Modifier.fillMaxWidth(), expandedRatio = 0f) {
-    clickableItem(onClick = callbacks.onTakePhoto, label = take, weight = 1f, enabled = !draft.saving)
-    clickableItem(onClick = callbacks.onPickPhoto, label = pick, weight = 1f, enabled = !draft.saving)
+  // Whole actions wrap instead of sharing a line: a connected group narrows each item below its
+  // longest word at 200% text and breaks "Choose photo" in the middle.
+  FlowRow(
+    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    OutlinedButton(
+      onClick = callbacks.onTakePhoto,
+      enabled = !draft.saving,
+      modifier = Modifier.heightIn(min = 48.dp),
+    ) {
+      Text(take)
+    }
+    OutlinedButton(
+      onClick = callbacks.onPickPhoto,
+      enabled = !draft.saving,
+      modifier = Modifier.heightIn(min = 48.dp),
+    ) {
+      Text(pick)
+    }
   }
   if (!draft.photoMessage.isNullOrBlank()) {
-    Text(
-      text = draft.photoMessage,
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-      modifier = Modifier.padding(top = 8.dp),
-    )
+    Surface(
+      modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+      shape = MaterialTheme.shapes.medium,
+      color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+      Text(
+        text = draft.photoMessage,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+      )
+    }
   }
 }
 

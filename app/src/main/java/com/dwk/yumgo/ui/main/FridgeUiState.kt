@@ -77,4 +77,6 @@ data class FridgeCallbacks(
   val onTakePhoto: () -> Unit,
   val onPickPhoto: () -> Unit,
   val onRemovePhoto: () -> Unit,
+  /** Header action that pushes the settings destination. */
+  val onOpenSettings: () -> Unit = {},
 )

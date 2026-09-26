@@ -1,8 +1,10 @@
 package com.dwk.yumgo.ui.main
 
+import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.dwk.yumgo.R
 import com.dwk.yumgo.data.FridgeItem
 import com.dwk.yumgo.data.FridgeRepository
 import com.dwk.yumgo.data.NewFridgeItem
@@ -23,7 +25,8 @@ import kotlinx.coroutines.launch
 
 /**
  * One fridge screen. [repository] and [photos] are the process's single instances,
- * created with the first ViewModel and kept across rotation.
+ * created with the first ViewModel and kept across rotation. [appContext] is the
+ * application context, read only for the user-facing copy this screen shows.
  *
  * Draft fields saved here use the raw photo ref (`staged/…` or `saved/…`).
  * [uiState] maps those refs through [PhotoStore.existingFile] so the UI can draw them.
@@ -31,6 +34,7 @@ import kotlinx.coroutines.launch
 class MainScreenViewModel(
   private val repository: FridgeRepository,
   private val photos: PhotoStore,
+  private val appContext: Context,
   private val savedState: SavedStateHandle,
 ) : ViewModel() {
   private val load = MutableStateFlow(FridgeLoad.Loading)
@@ -145,13 +149,16 @@ class MainScreenViewModel(
             persistDraft()
           }
         },
-        onFailure = { error -> notices.emit(FridgeNotice(error.message ?: "Couldn't update the quantity")) },
+        onFailure = { error -> notices.emit(FridgeNotice(text(R.string.fridge_notice_quantity, error))) },
       )
     }
   }
 
   fun onDelete(id: String) {
-    val name = items.value.firstOrNull { it.id == id }?.name ?: draft.value?.name ?: "Item"
+    val name =
+      items.value.firstOrNull { it.id == id }?.name
+        ?: draft.value?.name
+        ?: appContext.getString(R.string.fridge_unnamed_item)
     viewModelScope.launch {
       repository.delete(id).fold(
         onSuccess = {
@@ -161,7 +168,7 @@ class MainScreenViewModel(
           }
           setPendingUndo(id, name)
         },
-        onFailure = { error -> notices.emit(FridgeNotice(error.message ?: "Couldn't remove the item")) },
+        onFailure = { error -> notices.emit(FridgeNotice(text(R.string.fridge_notice_remove, error))) },
       )
     }
   }
@@ -172,7 +179,7 @@ class MainScreenViewModel(
     clearPendingUndo()
     viewModelScope.launch {
       repository.undoDelete(id).onFailure { error ->
-        notices.emit(FridgeNotice(error.message ?: "Couldn't undo"))
+        notices.emit(FridgeNotice(text(R.string.fridge_notice_undo, error)))
       }
     }
   }
@@ -188,7 +195,7 @@ class MainScreenViewModel(
     if (current.saving) return
     val name = current.name.trim()
     if (name.isEmpty()) {
-      draft.value = current.copy(errorMessage = "Enter a name")
+      draft.value = current.copy(errorMessage = appContext.getString(R.string.editor_name_required))
       persistDraft()
       return
     }
@@ -213,7 +220,7 @@ class MainScreenViewModel(
           cleanupIfIdle()
         },
         onFailure = { error ->
-          draft.value = draft.value?.copy(saving = false, errorMessage = error.message ?: "Couldn't save")
+          draft.value = draft.value?.copy(saving = false, errorMessage = text(R.string.fridge_notice_save, error))
           persistDraft()
         },
       )
@@ -264,7 +271,7 @@ class MainScreenViewModel(
       PhotoAcquisition.PermissionDenied ->
         draft.value =
           current.copy(
-            photoMessage = "Camera permission was not granted. You can type the item instead.",
+            photoMessage = appContext.getString(R.string.photo_permission_denied),
             saving = false,
           )
       is PhotoAcquisition.Failed -> draft.value = current.copy(photoMessage = result.message, saving = false)
@@ -304,7 +311,7 @@ class MainScreenViewModel(
         promoted
       },
       onFailure = { error ->
-        draft.value = draft.value?.copy(saving = false, errorMessage = error.message ?: "Couldn't save the photo")
+        draft.value = draft.value?.copy(saving = false, errorMessage = text(R.string.fridge_notice_photo, error))
         persistDraft()
         null
       },
@@ -357,6 +364,13 @@ class MainScreenViewModel(
         if (file != null) put(ref, file.absolutePath)
       }
     }
+
+  /** Reader copy first, then the failure detail, so a message is never blank. */
+  private fun text(id: Int, error: Throwable? = null): String {
+    val fallback = appContext.getString(id)
+    val detail = error?.message?.takeIf { it.isNotBlank() } ?: return fallback
+    return "$fallback: $detail"
+  }
 
   private fun persistDraft() {
     val current = draft.value
