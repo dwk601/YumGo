@@ -171,6 +171,12 @@ class FridgeContentWorkflowTest {
         draft = ItemDraft("milk", "Milk", 2, LocalDate.now().toEpochDay() + 3, null),
       )
     rule.waitForIdle()
+    Thread.sleep(1_500)
+    assertTrue(
+      "Editing focused Name before it was tapped",
+      rule.onAllNodes(hasSetTextAction() and hasText("Name") and isFocused()).fetchSemanticsNodes().isEmpty(),
+    )
+    assertTrue("Editing opened the keyboard before Name was tapped", imeTopOrNull() == null)
     rule.onNode(hasSetTextAction() and hasText("Name")).performClick()
     val imeTop = awaitImeTop()
     screenshot("edit-editor-ime")

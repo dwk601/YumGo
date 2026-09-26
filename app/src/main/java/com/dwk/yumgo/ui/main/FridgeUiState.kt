@@ -52,8 +52,10 @@ data class ItemDraft(
   val expiryEpochDay: Long?,
   val photoReference: String?,
   val saving: Boolean = false,
-  /** Recoverable save problem. Cleared by the caller when the draft next changes. */
+  /** Recoverable save problem. Shown on Name, not under Photo. */
   val errorMessage: String? = null,
+  /** Neutral photo problem. Shown under Photo, separate from [errorMessage]. */
+  val photoMessage: String? = null,
 )
 
 /**

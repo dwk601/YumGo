@@ -29,6 +29,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.DatePicker
@@ -64,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
@@ -99,7 +101,12 @@ fun ItemEditor(
       containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
       contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-      EditorBody(draft = draft, callbacks = callbacks, requestFocus = true, sheetState = sheetState)
+      EditorBody(
+        draft = draft,
+        callbacks = callbacks,
+        requestFocus = draft.id == null,
+        sheetState = sheetState,
+      )
     }
   }
 }
@@ -111,6 +118,8 @@ private fun RestoredEditor(
   backEnabled: Boolean,
   modifier: Modifier = Modifier,
 ) {
+  val focusManager = LocalFocusManager.current
+  LaunchedEffect(Unit) { focusManager.clearFocus(force = true) }
   val navigationState = rememberNavigationEventState(currentInfo = NavigationEventInfo.None)
   NavigationBackHandler(
     state = navigationState,
@@ -134,7 +143,10 @@ private fun RestoredEditor(
       color = MaterialTheme.colorScheme.surfaceContainerLow,
       contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-      EditorBody(draft = draft, callbacks = callbacks, requestFocus = false, sheetState = null)
+      Column(Modifier.fillMaxWidth()) {
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { BottomSheetDefaults.DragHandle() }
+        EditorBody(draft = draft, callbacks = callbacks, requestFocus = false, sheetState = null)
+      }
     }
   }
 }
@@ -160,11 +172,13 @@ private fun EditorBody(
     sheetState != null && sheetState.currentValue == SheetValue.Expanded && !sheetState.isAnimationRunning
   val scroll = rememberScrollState()
   var pickingDate by rememberSaveable { mutableStateOf(false) }
+  var didAutofocus by remember(draft.id) { mutableStateOf(false) }
   val canSave = draft.name.isNotBlank() && !draft.saving
   LaunchedEffect(draft.id, requestFocus, windowFocused, sheetReady) {
-    if (requestFocus && windowFocused && sheetReady) {
+    if (requestFocus && draft.id == null && !didAutofocus && windowFocused && sheetReady) {
       focus.requestFocus()
       keyboard?.show()
+      didAutofocus = true
     }
   }
 
@@ -296,6 +310,14 @@ private fun PhotoRow(draft: ItemDraft, callbacks: FridgeCallbacks) {
   }, modifier = Modifier.fillMaxWidth(), expandedRatio = 0f) {
     clickableItem(onClick = callbacks.onTakePhoto, label = take, weight = 1f, enabled = !draft.saving)
     clickableItem(onClick = callbacks.onPickPhoto, label = pick, weight = 1f, enabled = !draft.saving)
+  }
+  if (!draft.photoMessage.isNullOrBlank()) {
+    Text(
+      text = draft.photoMessage,
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.padding(top = 8.dp),
+    )
   }
 }
 

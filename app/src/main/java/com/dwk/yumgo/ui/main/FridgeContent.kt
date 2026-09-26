@@ -187,7 +187,7 @@ private fun FridgeScaffold(
       ExtendedFloatingActionButton(
         onClick = callbacks.onAdd,
         modifier = Modifier.semantics { contentDescription = addLabel },
-        icon = { Icon(FridgePlus, contentDescription = addLabel) },
+        icon = { Icon(FridgePlus, contentDescription = null) },
         text = { Text(addLabel) },
       )
     },
@@ -477,6 +477,7 @@ internal fun FridgeThumbnail(name: String, photoReference: String?, modifier: Mo
     AnimatedContent(
       targetState = bitmap,
       modifier = Modifier.fillMaxSize(),
+      contentAlignment = Alignment.Center,
       transitionSpec = { fadeIn(photoFade) togetherWith fadeOut(photoFade) },
       label = "photo",
     ) { image ->
@@ -776,7 +777,7 @@ private fun decodeSampled(
   val measured = bounds()
   if (measured.outWidth <= 0 || measured.outHeight <= 0) return null
   val decoded = decode(sampleSize(measured.outWidth, measured.outHeight, 256)) ?: return null
-  return rotate(decoded, rotationDegrees(orientation())).asImageBitmap()
+  return applyExifOrientation(decoded, orientation()).asImageBitmap()
 }
 
 private fun sampleSize(width: Int, height: Int, maxEdge: Int): Int {
@@ -785,23 +786,30 @@ private fun sampleSize(width: Int, height: Int, maxEdge: Int): Int {
   return size
 }
 
-private fun rotationDegrees(orientation: Int): Int =
+private fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
+  val matrix = Matrix()
   when (orientation) {
-    ExifInterface.ORIENTATION_ROTATE_90,
-    ExifInterface.ORIENTATION_TRANSPOSE -> 90
-    ExifInterface.ORIENTATION_ROTATE_180,
-    ExifInterface.ORIENTATION_FLIP_VERTICAL -> 180
-    ExifInterface.ORIENTATION_ROTATE_270,
-    ExifInterface.ORIENTATION_TRANSVERSE -> 270
-    else -> 0
+    ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
+    ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
+    ExifInterface.ORIENTATION_FLIP_VERTICAL -> {
+      matrix.setRotate(180f)
+      matrix.postScale(-1f, 1f)
+    }
+    ExifInterface.ORIENTATION_TRANSPOSE -> {
+      matrix.setRotate(90f)
+      matrix.postScale(-1f, 1f)
+    }
+    ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
+    ExifInterface.ORIENTATION_TRANSVERSE -> {
+      matrix.setRotate(-90f)
+      matrix.postScale(-1f, 1f)
+    }
+    ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(-90f)
+    else -> return bitmap
   }
-
-private fun rotate(bitmap: Bitmap, degrees: Int): Bitmap {
-  if (degrees == 0) return bitmap
-  val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
-  val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-  if (rotated != bitmap) bitmap.recycle()
-  return rotated
+  val oriented = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+  if (oriented != bitmap) bitmap.recycle()
+  return oriented
 }
 
 private const val MaxPhotoBytes = 24 * 1024 * 1024
