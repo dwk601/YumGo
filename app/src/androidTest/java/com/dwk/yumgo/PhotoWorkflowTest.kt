@@ -17,6 +17,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -125,6 +126,115 @@ class PhotoWorkflowTest {
     composeRule.onNodeWithText("Save").performClick()
     composeRule.waitUntil(15_000) { composeRule.onAllNodes(hasText("Denied Oats")).fetchSemanticsNodes().isNotEmpty() }
     composeRule.onNodeWithText("Denied Oats").assertIsDisplayed()
+  }
+
+  /**
+   * Camera Back returns to the same typed draft; the open camera and a staged photo both survive
+   * activity recreation; the photo is promoted into saved storage on Save.
+   * Runs after [cameraDenial_returnsToTyping] and [captureReview_persistsSavedPhotoAcrossRelaunch] (name order), so granting here cannot fake a denial or skip the real Allow dialog.
+   */
+  @Test
+  fun photoDraft_survivesCameraBackAndRecreation() {
+    grantCamera()
+    addButton().performClick()
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Back Kale")
+    composeRule.onNodeWithText("Take photo").performClick()
+    awaitShutter()
+    shell("input keyevent 4")
+    composeRule.waitUntil(10_000) {
+      nodeCount(hasTestTag("photo_capture")) == 0 && nodeCount(hasSetTextAction() and hasText("Back Kale", substring = true)) > 0
+    }
+    composeRule.onNodeWithText("Add to the fridge").assertIsDisplayed()
+
+    composeRule.onNodeWithText("Take photo").performClick()
+    awaitShutter()
+    composeRule.activity.runOnUiThread { composeRule.activity.recreate() }
+    composeRule.waitForIdle()
+    awaitShutter()
+    composeRule.onNodeWithTag("photo_shutter").performClick()
+    composeRule.waitUntil(20_000) { nodeCount(hasTestTag("photo_use") and isEnabled()) > 0 }
+    composeRule.onNodeWithTag("photo_use").performClick()
+    composeRule.waitUntil(10_000) { nodeCount(hasText("Remove photo")) > 0 }
+
+    composeRule.activity.runOnUiThread { composeRule.activity.recreate() }
+    composeRule.waitForIdle()
+    composeRule.waitUntil(10_000) {
+      nodeCount(hasSetTextAction() and hasText("Back Kale", substring = true)) > 0 && nodeCount(hasText("Remove photo")) > 0
+    }
+    val staged = File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "fridge-photos/staged")
+    assertTrue("Staged photo missing after recreation", staged.listFiles().orEmpty().any { it.name.endsWith(".jpg") })
+
+    composeRule.onNodeWithText("Save").performClick()
+    composeRule.waitUntil(10_000) { readPhotoRef("Back Kale") != null }
+    val ref = readPhotoRef("Back Kale")!!
+    assertTrue(ref, ref.startsWith("saved/"))
+    assertTrue(File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "fridge-photos/$ref").isFile)
+  }
+
+  /**
+   * A deleted item's saved photo is still protected while Undo is offered, even when another save
+   * runs photo cleanup, and Undo brings back the same photo.
+   */
+  @Test
+  fun deletedPhotoItem_keepsPhotoThroughCleanupUntilUndo() {
+    grantCamera()
+    addButton().performClick()
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Undo Plum")
+    composeRule.onNodeWithText("Take photo").performClick()
+    awaitShutter()
+    composeRule.onNodeWithTag("photo_shutter").performClick()
+    composeRule.waitUntil(20_000) { nodeCount(hasTestTag("photo_use") and isEnabled()) > 0 }
+    composeRule.onNodeWithTag("photo_use").performClick()
+    composeRule.waitUntil(10_000) { nodeCount(hasText("Remove photo")) > 0 }
+    composeRule.onNodeWithText("Save").performClick()
+    composeRule.waitUntil(10_000) { readPhotoRef("Undo Plum") != null }
+    val ref = readPhotoRef("Undo Plum")!!
+    val file = File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "fridge-photos/$ref")
+    assertTrue(file.isFile)
+
+    composeRule.onNodeWithText("Undo Plum").performClick()
+    // The edit sheet raises the keyboard after it opens, which shrinks and re-lays the sheet.
+    // Wait for that to settle, then scroll to Remove (below the fold with a photo) like a user would.
+    awaitImeSettled()
+    composeRule.onNodeWithText("Remove from fridge").performScrollTo().assertIsDisplayed().performClick()
+    composeRule.waitUntil(10_000) { nodeCount(hasText("Undo")) > 0 && nodeCount(hasText("Undo Plum")) == 0 }
+
+    addButton().performClick()
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Cleanup Rice")
+    composeRule.onNodeWithText("Save").performClick()
+    composeRule.waitUntil(10_000) { nodeCount(hasText("Cleanup Rice")) > 0 }
+    composeRule.waitForIdle()
+    Thread.sleep(1_000)
+    assertTrue("Cleanup deleted the photo of an item that can still be undone", file.isFile)
+
+    composeRule.onNodeWithText("Undo").assertIsDisplayed().performClick()
+    composeRule.waitUntil(10_000) { nodeCount(hasText("Undo Plum")) > 0 }
+    assertTrue(readPhotoRef("Undo Plum") == ref)
+    assertTrue("Restored item's photo is gone", file.isFile)
+  }
+
+  private fun awaitImeSettled() {
+    val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+    fun imeTop(): Int? =
+      automation.windows.firstOrNull { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+        ?.let { window -> Rect().also(window::getBoundsInScreen).takeIf { it.height() > 0 }?.top }
+    composeRule.waitUntil(10_000) { imeTop() != null }
+    var previous: Int? = null
+    composeRule.waitUntil(5_000) {
+      Thread.sleep(150)
+      val top = imeTop()
+      (top != null && top == previous).also { previous = top }
+    }
+    composeRule.waitForIdle()
+  }
+
+  private fun grantCamera() {
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    instrumentation.uiAutomation.grantRuntimePermission(instrumentation.targetContext.packageName, Manifest.permission.CAMERA)
+  }
+
+  private fun awaitShutter() {
+    composeRule.waitUntil(25_000) { nodeCount(hasTestTag("photo_shutter") and isEnabled()) > 0 }
   }
 
   private fun nodeCount(matcher: androidx.compose.ui.test.SemanticsMatcher): Int =

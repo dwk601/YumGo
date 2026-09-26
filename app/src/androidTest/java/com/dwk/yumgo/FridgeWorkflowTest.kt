@@ -110,6 +110,44 @@ class FridgeWorkflowTest {
     org.junit.Assert.assertTrue("Save bottom $bottom is under the keyboard $imeTop", bottom <= imeTop)
   }
 
+  /**
+   * Cold relaunch: the first activity and its ViewModels are destroyed, the process-wide
+   * repository is dropped, and a new activity must read the item back from the SQLite file.
+   */
+  @Test
+  fun coldRelaunch_readsSavedItemFromDisk() {
+    addButton().performClick()
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Cold Butter")
+    composeRule.onNodeWithText("Save").performClick()
+    composeRule.waitUntil(10_000) { nodeCount("Cold Butter") > 0 }
+    val increase =
+      composeRule.onAllNodes(hasContentDescription("Increase quantity of Cold Butter"), useUnmergedTree = true)
+        .fetchSemanticsNodes().first()
+    shell(
+      "input tap ${(increase.positionOnScreen.x + increase.size.width / 2f).toInt()} " +
+        "${(increase.positionOnScreen.y + increase.size.height / 2f).toInt()}",
+    )
+    composeRule.waitUntil(8_000) { readQuantity("Cold Butter") == 2 }
+
+    composeRule.activityRule.scenario.close()
+    com.dwk.yumgo.ui.main.PhotoStoreHolder.resetForTests()
+    androidx.test.core.app.ActivityScenario.launch(MainActivity::class.java).use {
+      composeRule.waitUntil(10_000) { nodeCount("Cold Butter") > 0 }
+      composeRule.onNodeWithText("Cold Butter").assertIsDisplayed()
+      composeRule.onNode(hasContentDescription("Quantity 2"), useUnmergedTree = true).assertIsDisplayed()
+    }
+  }
+
+  private fun readQuantity(name: String): Int? {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val path = context.getDatabasePath("yumgo_fridge.db").path
+    return SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+      db.rawQuery("SELECT quantity FROM fridge_item WHERE name = ? AND deleted_at IS NULL", arrayOf(name)).use {
+        if (it.moveToFirst()) it.getInt(0) else null
+      }
+    }
+  }
+
   private fun addButton() =
     composeRule.onNode(hasClickAction() and hasAnyDescendant(hasText("Add")), useUnmergedTree = true)
 
