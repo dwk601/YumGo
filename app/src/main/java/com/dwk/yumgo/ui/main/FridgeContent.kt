@@ -137,7 +137,12 @@ fun FridgeContent(
       Box(Modifier.fillMaxSize()) {
         FridgeScaffold(state = state, callbacks = callbacks, snackbarHost = snackbarHost)
         state.draft?.let { draft ->
-          ItemEditor(draft = draft, callbacks = callbacks, restored = restoreEditor || state.cameraOpen)
+          ItemEditor(
+            draft = draft,
+            callbacks = callbacks,
+            restored = restoreEditor || state.cameraOpen,
+            backEnabled = !state.cameraOpen,
+          )
         }
       }
     }
@@ -178,10 +183,12 @@ private fun FridgeScaffold(
     snackbarHost = snackbarHost,
     topBar = { FridgeHeader(state = state, useSoon = useSoon, callbacks = callbacks) },
     floatingActionButton = {
+      val addLabel = stringResource(R.string.fridge_add)
       ExtendedFloatingActionButton(
         onClick = callbacks.onAdd,
-        icon = { Icon(FridgePlus, contentDescription = null) },
-        text = { Text(stringResource(R.string.fridge_add)) },
+        modifier = Modifier.semantics { contentDescription = addLabel },
+        icon = { Icon(FridgePlus, contentDescription = addLabel) },
+        text = { Text(addLabel) },
       )
     },
   ) { innerPadding ->

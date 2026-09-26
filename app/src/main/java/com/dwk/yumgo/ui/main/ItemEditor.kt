@@ -45,13 +45,21 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
+import android.view.ViewTreeObserver
+import androidx.compose.material3.SheetState
+import androidx.compose.material3.SheetValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalView
+import androidx.navigationevent.NavigationEventInfo
+import androidx.navigationevent.compose.NavigationBackHandler
+import androidx.navigationevent.compose.rememberNavigationEventState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -75,11 +83,12 @@ fun ItemEditor(
   draft: ItemDraft,
   callbacks: FridgeCallbacks,
   restored: Boolean = false,
+  backEnabled: Boolean = true,
   modifier: Modifier = Modifier,
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   if (restored) {
-    RestoredEditor(draft = draft, callbacks = callbacks, modifier = modifier)
+    RestoredEditor(draft = draft, callbacks = callbacks, backEnabled = backEnabled, modifier = modifier)
   } else {
     ModalBottomSheet(
       onDismissRequest = { if (!draft.saving) callbacks.onDismissEditor() },
@@ -90,13 +99,24 @@ fun ItemEditor(
       containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
       contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-      EditorBody(draft = draft, callbacks = callbacks, requestFocus = true)
+      EditorBody(draft = draft, callbacks = callbacks, requestFocus = true, sheetState = sheetState)
     }
   }
 }
 
 @Composable
-private fun RestoredEditor(draft: ItemDraft, callbacks: FridgeCallbacks, modifier: Modifier = Modifier) {
+private fun RestoredEditor(
+  draft: ItemDraft,
+  callbacks: FridgeCallbacks,
+  backEnabled: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  val navigationState = rememberNavigationEventState(currentInfo = NavigationEventInfo.None)
+  NavigationBackHandler(
+    state = navigationState,
+    isBackEnabled = backEnabled && !draft.saving,
+    onBackCompleted = { callbacks.onDismissEditor() },
+  )
   Box(modifier.fillMaxSize()) {
     Box(
       Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f)).clickable(
@@ -114,20 +134,35 @@ private fun RestoredEditor(draft: ItemDraft, callbacks: FridgeCallbacks, modifie
       color = MaterialTheme.colorScheme.surfaceContainerLow,
       contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-      EditorBody(draft = draft, callbacks = callbacks, requestFocus = false)
+      EditorBody(draft = draft, callbacks = callbacks, requestFocus = false, sheetState = null)
     }
   }
 }
 
 @Composable
-private fun EditorBody(draft: ItemDraft, callbacks: FridgeCallbacks, requestFocus: Boolean) {
+private fun EditorBody(
+  draft: ItemDraft,
+  callbacks: FridgeCallbacks,
+  requestFocus: Boolean,
+  sheetState: SheetState? = null,
+) {
   val focus = remember { FocusRequester() }
   val keyboard = LocalSoftwareKeyboardController.current
+  val view = LocalView.current
+  var windowFocused by remember { mutableStateOf(view.hasWindowFocus()) }
+  DisposableEffect(view) {
+    val listener = ViewTreeObserver.OnWindowFocusChangeListener { hasFocus -> windowFocused = hasFocus }
+    view.viewTreeObserver.addOnWindowFocusChangeListener(listener)
+    windowFocused = view.hasWindowFocus()
+    onDispose { view.viewTreeObserver.removeOnWindowFocusChangeListener(listener) }
+  }
+  val sheetReady =
+    sheetState != null && sheetState.currentValue == SheetValue.Expanded && !sheetState.isAnimationRunning
   val scroll = rememberScrollState()
   var pickingDate by rememberSaveable { mutableStateOf(false) }
   val canSave = draft.name.isNotBlank() && !draft.saving
-  LaunchedEffect(draft.id, requestFocus) {
-    if (requestFocus) {
+  LaunchedEffect(draft.id, requestFocus, windowFocused, sheetReady) {
+    if (requestFocus && windowFocused && sheetReady) {
       focus.requestFocus()
       keyboard?.show()
     }
