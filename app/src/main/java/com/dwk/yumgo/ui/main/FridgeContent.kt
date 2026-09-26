@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -489,12 +490,14 @@ internal fun FridgeThumbnail(name: String, photoReference: String?, modifier: Mo
           contentScale = ContentScale.Crop,
         )
       } else {
-        Text(
-          text = monogram(name),
-          style = MaterialTheme.typography.headlineSmall,
-          color = MaterialTheme.colorScheme.onPrimaryContainer,
-          modifier = Modifier.clearAndSetSemantics {},
-        )
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+          Text(
+            text = monogram(name),
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.wrapContentSize(Alignment.Center).clearAndSetSemantics {},
+          )
+        }
       }
     }
   }
