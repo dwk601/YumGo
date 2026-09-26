@@ -5,7 +5,13 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.hardware.display.DisplayManager
+import android.media.ExifInterface
+import android.os.Handler
+import android.os.Looper
 import android.view.Surface
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -94,14 +100,19 @@ sealed interface PhotoAcquisition {
  * Camera shown after the user taps capture. Permission is requested here, not when the editor opens.
  * Back, denial, cancel, and errors only report an outcome. A missing camera reports [PhotoAcquisition.Failed].
  *
+ * [onReviewRef] receives the staged ref while it is on the review screen, including after process
+ * restoration, and null otherwise. [PhotoStore.activeReviewRef] persists the same ref. Do not call
+ * [PhotoStore.cleanup] or [PhotoStore.cleanupSaved] while this UI is up.
+ *
  * Test tags: `photo_capture`, `photo_shutter`, `photo_use`, `photo_retake`, `photo_cancel`,
- * `photo_type_instead`, `photo_permission_continue`, `photo_preview`.
+ * `photo_type_instead`, `photo_permission_continue`, `photo_preview`, `photo_review_error`.
  */
 @Composable
 fun PhotoCapture(
   photoStore: PhotoStore,
   onResult: (PhotoAcquisition) -> Unit,
   modifier: Modifier = Modifier,
+  onReviewRef: (String?) -> Unit = {},
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -115,6 +126,8 @@ fun PhotoCapture(
   var boundCapture by remember { mutableStateOf<ImageCapture?>(null) }
   var scratchFile by remember { mutableStateOf<File?>(null) }
   var captureGeneration by remember { mutableIntStateOf(0) }
+  var reviewReady by remember { mutableStateOf(false) }
+  val currentReviewRef by rememberUpdatedState(onReviewRef)
 
   fun finish(result: PhotoAcquisition) {
     if (delivered.compareAndSet(false, true)) currentOnResult(result)
@@ -130,10 +143,18 @@ fun PhotoCapture(
     capturing = false
     scope.launch {
       withContext(NonCancellable) {
+        photoStore.setActiveReview(null)
         if (review != null) photoStore.discard(review)
         if (scratch != null) photoStore.abandonCaptureFile(scratch)
       }
       currentOnResult(PhotoAcquisition.Cancelled)
+    }
+  }
+
+  DisposableEffect(Unit) {
+    onDispose {
+      val scratch = scratchFile
+      if (scratch != null) photoStore.releasePartialNow(scratch)
     }
   }
 
@@ -171,6 +192,17 @@ fun PhotoCapture(
 
   LaunchedEffect(phase, reviewRef) {
     if (phase == PHASE_REVIEW && reviewRef == null) phase = PHASE_CAMERA
+  }
+
+  LaunchedEffect(reviewRef) { reviewReady = false }
+
+  LaunchedEffect(reviewRef, phase) {
+    if (phase == PHASE_REVIEW && reviewRef != null) {
+      photoStore.setActiveReview(reviewRef)
+      currentReviewRef(reviewRef)
+    } else {
+      currentReviewRef(null)
+    }
   }
 
   val rootColor =
@@ -239,10 +271,12 @@ fun PhotoCapture(
                         }
                         photoStore.commitCaptureFile(file).fold(
                           onSuccess = { ref ->
+                            photoStore.setActiveReview(ref)
                             scratchFile = null
                             capturing = false
                             reviewRef = ref
                             errorText = null
+                            reviewReady = false
                             phase = PHASE_REVIEW
                           },
                           onFailure = {
@@ -278,24 +312,36 @@ fun PhotoCapture(
       PHASE_REVIEW -> {
         val ref = reviewRef
         if (ref != null) {
-          ReviewPhoto(photoStore = photoStore, ref = ref)
+          ReviewPhoto(
+            photoStore = photoStore,
+            ref = ref,
+            onDecoded = { ok ->
+              reviewReady = ok
+              errorText = if (ok) null else context.getString(R.string.photo_review_failed)
+            },
+          )
           CaptureBar(
             errorText = errorText,
-            primaryEnabled = true,
+            primaryEnabled = reviewReady,
             primaryLabel = stringResource(R.string.photo_use),
             primaryTag = "photo_use",
             secondaryLabel = stringResource(R.string.photo_retake),
             secondaryTag = "photo_retake",
             onSecondary = {
               scope.launch {
+                photoStore.setActiveReview(null)
                 photoStore.discard(ref)
                 reviewRef = null
                 errorText = null
+                reviewReady = false
                 phase = PHASE_CAMERA
               }
             },
             onCancel = { cancelCapture() },
-            onPrimary = { finish(PhotoAcquisition.Staged(ref)) },
+            onPrimary = {
+              finish(PhotoAcquisition.Staged(ref))
+              photoStore.clearActiveReviewNow()
+            },
           )
         }
       }
@@ -359,14 +405,28 @@ private fun CameraPreview(
   val failedOnce = remember { AtomicBoolean(false) }
   val previewDescription = stringResource(R.string.photo_preview_description)
 
-  SideEffect {
+  fun applyRotation() {
     val rotation = view.display?.rotation ?: Surface.ROTATION_0
     preview.setTargetRotation(rotation)
     imageCapture.setTargetRotation(rotation)
   }
 
+  SideEffect { applyRotation() }
+
   DisposableEffect(lifecycleOwner) {
     val cancelled = AtomicBoolean(false)
+    val displayManager = context.getSystemService(DisplayManager::class.java)
+    val displayListener =
+      object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+
+        override fun onDisplayRemoved(displayId: Int) {}
+
+        override fun onDisplayChanged(displayId: Int) {
+          applyRotation()
+        }
+      }
+    displayManager?.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
     val future = ProcessCameraProvider.getInstance(context)
     future.addListener(
       {
@@ -379,6 +439,7 @@ private fun CameraPreview(
     )
     onDispose {
       cancelled.set(true)
+      displayManager?.unregisterDisplayListener(displayListener)
       surfaceRequest = null
       preview.setSurfaceProvider(null)
       onUnbound()
@@ -437,26 +498,46 @@ private fun bindCamera(
 }
 
 @Composable
-private fun ReviewPhoto(photoStore: PhotoStore, ref: String) {
+private fun ReviewPhoto(photoStore: PhotoStore, ref: String, onDecoded: (Boolean) -> Unit) {
   var bitmap by remember(ref) { mutableStateOf<ImageBitmap?>(null) }
+  var failed by remember(ref) { mutableStateOf(false) }
+  val currentOnDecoded by rememberUpdatedState(onDecoded)
   LaunchedEffect(ref) {
-    bitmap =
+    val decoded =
       withContext(Dispatchers.IO) {
         val file = photoStore.existingFile(ref) ?: return@withContext null
         decodeSampled(file)?.asImageBitmap()
       }
+    if (decoded == null) {
+      failed = true
+      bitmap = null
+      currentOnDecoded(false)
+    } else {
+      failed = false
+      bitmap = decoded
+      currentOnDecoded(true)
+    }
   }
   val description = stringResource(R.string.photo_review_description)
   val current = bitmap
-  if (current == null) {
-    Box(Modifier.fillMaxSize().semantics { contentDescription = description }.testTag("photo_preview"))
-  } else {
-    Image(
-      bitmap = current,
-      contentDescription = description,
-      contentScale = ContentScale.Fit,
-      modifier = Modifier.fillMaxSize().testTag("photo_preview"),
-    )
+  when {
+    current != null ->
+      Image(
+        bitmap = current,
+        contentDescription = description,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier.fillMaxSize().testTag("photo_preview"),
+      )
+    failed ->
+      Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(24.dp), contentAlignment = Alignment.Center) {
+        Text(
+          text = stringResource(R.string.photo_review_failed),
+          color = MaterialTheme.colorScheme.error,
+          style = MaterialTheme.typography.bodyLarge,
+          modifier = Modifier.testTag("photo_review_error"),
+        )
+      }
+    else -> Box(Modifier.fillMaxSize().semantics { contentDescription = description }.testTag("photo_preview"))
   }
 }
 
@@ -553,10 +634,55 @@ private fun ProcessCameraProvider.hasCameraSafe(selector: CameraSelector): Boole
     false
   }
 
-private fun decodeSampled(file: File): android.graphics.Bitmap? {
+private fun decodeSampled(file: File): Bitmap? {
   val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
   BitmapFactory.decodeFile(file.absolutePath, bounds)
+  if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
   var sample = 1
-  while (bounds.outWidth / sample > 1600 && bounds.outHeight / sample > 1600 && sample < 32) sample *= 2
-  return BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
+  while (bounds.outWidth / sample > MAX_REVIEW_EDGE || bounds.outHeight / sample > MAX_REVIEW_EDGE) {
+    if (sample > Int.MAX_VALUE / 2) break
+    sample *= 2
+  }
+  val decoded =
+    BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+  return applyExifOrientation(decoded, file)
 }
+
+private fun applyExifOrientation(bitmap: Bitmap, file: File): Bitmap {
+  val orientation =
+    try {
+      file.inputStream().use { stream ->
+        ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+      }
+    } catch (_: Exception) {
+      return bitmap
+    }
+  val matrix =
+    Matrix().apply {
+      when (orientation) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> postRotate(90f)
+        ExifInterface.ORIENTATION_ROTATE_180 -> postRotate(180f)
+        ExifInterface.ORIENTATION_ROTATE_270 -> postRotate(270f)
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> preScale(-1f, 1f)
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> preScale(1f, -1f)
+        ExifInterface.ORIENTATION_TRANSPOSE -> {
+          postRotate(90f)
+          preScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_TRANSVERSE -> {
+          postRotate(270f)
+          preScale(-1f, 1f)
+        }
+        else -> return bitmap
+      }
+    }
+  return try {
+    val oriented = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    if (oriented != bitmap) bitmap.recycle()
+    oriented
+  } catch (_: Exception) {
+    bitmap
+  }
+}
+
+private const val MAX_REVIEW_EDGE = 1600

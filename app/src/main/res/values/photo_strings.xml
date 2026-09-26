@@ -15,4 +15,5 @@
     <string name="photo_picker_failed">That photo could not be used. You can type the item instead.</string>
     <string name="photo_preview_description">Live camera preview</string>
     <string name="photo_review_description">Photo ready to keep or retake</string>
+    <string name="photo_review_failed">This photo could not be shown. Retake it or cancel.</string>
 </resources>

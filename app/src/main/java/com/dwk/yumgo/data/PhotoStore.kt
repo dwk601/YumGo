@@ -1,6 +1,7 @@
 package com.dwk.yumgo.data
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.net.Uri
 import java.io.File
 import java.io.IOException
@@ -17,16 +18,20 @@ import kotlinx.coroutines.withContext
  * A staged ref looks like `staged/<uuid>.jpg`. [promote] turns it into `saved/<uuid>.jpg`.
  * Both are relative to the app's `filesDir/fridge-photos` directory.
  *
- * [discard] and [cleanup] delete staged files only. Saved files and any ref in the protected
- * set passed by the caller are left on disk, including undo and in-progress draft refs.
- * This store does not read the fridge database; the caller decides what is protected.
+ * [cleanup] deletes unreferenced staged files and abandoned capture scratch files.
+ * It keeps every ref in the caller's protected set, the active review ref from [activeReviewRef],
+ * and staged files newer than [STAGED_GRACE_MS]. [cleanupSaved] is the only way to delete saved
+ * files, and it also keeps every protected ref. Do not call either while capture or the picker is
+ * on screen. Nothing is uploaded.
  */
 class PhotoStore(context: Context) {
   private val resolver = context.applicationContext.contentResolver
   private val root = File(context.applicationContext.filesDir, ROOT_DIRECTORY)
   private val stagedDir = File(root, STAGED_DIRECTORY)
   private val savedDir = File(root, SAVED_DIRECTORY)
+  private val reviewMarker = File(root, REVIEW_MARKER)
   private val lock = Any()
+  private val partialsInUse = mutableSetOf<String>()
 
   /** Copy a picker URI into a new staged file. The content URI is not retained. */
   suspend fun stageFromUri(uri: Uri): Result<String> {
@@ -43,15 +48,21 @@ class PhotoStore(context: Context) {
         }
         input.use { source ->
           destination.outputStream().use { output ->
-            source.copyTo(output)
+            val buffer = ByteArray(COPY_BUFFER_BYTES)
+            var copied = 0L
+            while (true) {
+              if (job?.isActive == false) throw CancellationException("Photo staging cancelled")
+              val read = source.read(buffer)
+              if (read < 0) break
+              if (copied + read > MAX_PICK_BYTES) throw PhotoRejectedException()
+              output.write(buffer, 0, read)
+              copied += read
+            }
             output.fd.sync()
           }
         }
-        if (job?.isActive == false) {
-          destination.delete()
-          throw CancellationException("Photo staging cancelled")
-        }
-        if (destination.length() <= 0L) {
+        if (job?.isActive == false) throw CancellationException("Photo staging cancelled")
+        if (destination.length() <= 0L || destination.length() > MAX_PICK_BYTES || !hasImageBounds(destination)) {
           destination.delete()
           Result.failure(PhotoStoreException("Couldn't read the photo"))
         } else {
@@ -60,6 +71,9 @@ class PhotoStore(context: Context) {
       } catch (cancelled: CancellationException) {
         destination.delete()
         throw cancelled
+      } catch (_: PhotoRejectedException) {
+        destination.delete()
+        Result.failure(PhotoStoreException("Couldn't read the photo"))
       } catch (error: Exception) {
         destination.delete()
         Result.failure(PhotoStoreException("Couldn't read the photo", error))
@@ -76,6 +90,7 @@ class PhotoStore(context: Context) {
       } else {
         val partial = File(stagedDir, "${UUID.randomUUID()}$JPEG_EXTENSION$PARTIAL_SUFFIX")
         if (partial.createNewFile() || partial.isFile) {
+          partialsInUse.add(partial.name)
           Result.success(partial)
         } else {
           Result.failure(PhotoStoreException("Couldn't prepare the photo"))
@@ -83,18 +98,20 @@ class PhotoStore(context: Context) {
       }
     }
 
-  /** Publish a captured scratch file as a staged ref. Deletes the scratch file if it is empty. */
+  /** Publish a captured scratch file as a staged ref. Deletes the scratch file if it is empty or not an image. */
   suspend fun commitCaptureFile(file: File): Result<String> =
     io {
       val partial = managedPartial(file)
       if (partial == null) {
         Result.failure(PhotoStoreException("Couldn't prepare the photo"))
-      } else if (partial.length() <= 0L) {
+      } else if (partial.length() <= 0L || !hasImageBounds(partial)) {
+        partialsInUse.remove(partial.name)
         partial.delete()
         Result.failure(PhotoStoreException("Couldn't save the photo"))
       } else {
         val finalName = partial.name.removeSuffix(PARTIAL_SUFFIX)
         val destination = File(stagedDir, finalName)
+        partialsInUse.remove(partial.name)
         if (!partial.renameTo(destination)) {
           partial.delete()
           Result.failure(PhotoStoreException("Couldn't save the photo"))
@@ -106,10 +123,37 @@ class PhotoStore(context: Context) {
 
   /** Delete a capture scratch file. Finished and saved files are not touched. */
   suspend fun abandonCaptureFile(file: File) {
+    io { releasePartialLocked(file) }
+  }
+
+  /** Same as [abandonCaptureFile], safe to call while composition is going away. */
+  internal fun releasePartialNow(file: File) {
+    synchronized(lock) { releasePartialLocked(file) }
+  }
+
+  /**
+   * Remember the staged ref on the review screen. Pass null when review ends.
+   * [cleanup] keeps this ref even if the caller does not list it. Survives process death.
+   */
+  suspend fun setActiveReview(ref: String?) {
     io {
-      managedPartial(file)?.delete()
+      ensureDirs()
+      if (ref == null) {
+        reviewMarker.delete()
+        return@io
+      }
+      val normalized = normalize(ref) ?: return@io
+      reviewMarker.writeText(normalized)
     }
   }
+
+  /** Clears the review marker without waiting. Call it only after the caller has stored the ref. */
+  fun clearActiveReviewNow() {
+    synchronized(lock) { reviewMarker.delete() }
+  }
+
+  /** Review ref recorded by [setActiveReview], or null when there is none or its file is gone. */
+  suspend fun activeReviewRef(): String? = io { readActiveReviewLocked() }
 
   /**
    * Move a staged ref into saved storage.
@@ -170,20 +214,51 @@ class PhotoStore(context: Context) {
     }
 
   /**
-   * Delete staged files whose refs are not in [protected].
-   * Saved files are never deleted. Nothing outside this store is deleted.
+   * Delete staged files whose refs are not in [protected], except the active review ref and
+   * staged files newer than [STAGED_GRACE_MS]. Also deletes capture scratch files that are not
+   * in use, and scratch files older than [PARTIAL_STALE_MS] even if a dead session still marks them.
+   * Saved files are not deleted. Nothing outside this store is deleted.
    */
   suspend fun cleanup(protected: Set<String>): Result<Unit> =
     io {
       if (!stagedDir.isDirectory) return@io Result.success(Unit)
-      val keep = protected.mapNotNull { normalize(it) }.toSet()
+      val keep = protected.mapNotNull { normalize(it) }.toMutableSet()
+      readActiveReviewLocked()?.let(keep::add)
+      val now = System.currentTimeMillis()
       var failed = false
       stagedDir.listFiles()?.forEach { file ->
+        if (!file.isFile || !isInside(file, stagedDir)) return@forEach
+        if (PARTIAL_NAME.matches(file.name)) {
+          val stale = now - file.lastModified() >= PARTIAL_STALE_MS
+          if (file.name !in partialsInUse || stale) {
+            if (file.delete()) partialsInUse.remove(file.name) else failed = true
+          }
+          return@forEach
+        }
         val ref = "$STAGED_DIRECTORY/${file.name}"
-        if (!REF.matches(ref) || ref in keep || !file.isFile || !isInside(file, stagedDir)) return@forEach
+        if (!REF.matches(ref) || ref in keep) return@forEach
+        if (now - file.lastModified() < STAGED_GRACE_MS) return@forEach
         if (!file.delete()) failed = true
       }
       if (failed) Result.failure(PhotoStoreException("Couldn't clean up photos")) else Result.success(Unit)
+    }
+
+  /**
+   * Delete saved files that are not in [protected].
+   * Include every repository photo ref (hidden deletes too), the current draft, and undo refs.
+   * Staged files, scratch files, and every protected ref are kept. An empty set deletes every saved photo.
+   */
+  suspend fun cleanupSaved(protected: Set<String>): Result<Unit> =
+    io {
+      if (!savedDir.isDirectory) return@io Result.success(Unit)
+      val keep = protected.mapNotNull { normalize(it) }.toSet()
+      var failed = false
+      savedDir.listFiles()?.forEach { file ->
+        val ref = "$SAVED_DIRECTORY/${file.name}"
+        if (!REF.matches(ref) || ref in keep || !file.isFile || !isInside(file, savedDir)) return@forEach
+        if (!file.delete()) failed = true
+      }
+      if (failed) Result.failure(PhotoStoreException("Couldn't clean up saved photos")) else Result.success(Unit)
     }
 
   /** File for a staged or saved ref, or null when the ref is invalid, outside this store, or missing. */
@@ -203,6 +278,33 @@ class PhotoStore(context: Context) {
       return PhotoStoreException("Couldn't prepare photo storage")
     }
     return null
+  }
+
+  private fun releasePartialLocked(file: File) {
+    partialsInUse.remove(file.name)
+    managedPartial(file)?.delete()
+  }
+
+  private fun readActiveReviewLocked(): String? {
+    if (!reviewMarker.isFile) return null
+    val normalized =
+      try {
+        normalize(reviewMarker.readText())
+      } catch (_: IOException) {
+        null
+      } ?: return null
+    val file = File(root, normalized)
+    return if (file.isFile && isInside(file, stagedDir)) normalized else null
+  }
+
+  private fun hasImageBounds(file: File): Boolean {
+    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    return try {
+      BitmapFactory.decodeFile(file.absolutePath, options)
+      options.outWidth > 0 && options.outHeight > 0
+    } catch (_: Exception) {
+      false
+    }
   }
 
   private fun managedPartial(file: File): File? {
@@ -260,21 +362,35 @@ class PhotoStore(context: Context) {
       synchronized(lock) { block() }
     }
 
-  private companion object {
-    const val ROOT_DIRECTORY = "fridge-photos"
-    const val STAGED_DIRECTORY = "staged"
-    const val SAVED_DIRECTORY = "saved"
-    const val JPEG_EXTENSION = ".jpg"
-    const val PARTIAL_SUFFIX = ".partial"
-    val REF = Regex("""^(staged|saved)/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.jpg$""")
-    val PARTIAL_NAME =
+  private class PhotoRejectedException : Exception()
+
+  companion object {
+    /** Picker copies stop once this many bytes have been read. */
+    const val MAX_PICK_BYTES = 25L * 1024L * 1024L
+
+    /** Staged files younger than this are kept by [cleanup] so a restored review is not deleted. */
+    const val STAGED_GRACE_MS = 120_000L
+
+    /** Scratch files older than this are deleted even if a capture session never released them. */
+    const val PARTIAL_STALE_MS = 120_000L
+
+    private const val ROOT_DIRECTORY = "fridge-photos"
+    private const val STAGED_DIRECTORY = "staged"
+    private const val SAVED_DIRECTORY = "saved"
+    private const val REVIEW_MARKER = "active-review.txt"
+    private const val JPEG_EXTENSION = ".jpg"
+    private const val PARTIAL_SUFFIX = ".partial"
+    private const val COPY_BUFFER_BYTES = 16 * 1024
+    private val REF =
+      Regex("""^(staged|saved)/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.jpg$""")
+    private val PARTIAL_NAME =
       Regex("""^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.jpg\.partial$""")
 
-    fun stagedRef(id: String): String = "$STAGED_DIRECTORY/$id$JPEG_EXTENSION"
+    private fun stagedRef(id: String): String = "$STAGED_DIRECTORY/$id$JPEG_EXTENSION"
   }
 }
 
-/** Storage failure that did not delete saved or protected photos. */
+/** Storage failure that did not delete protected photos. */
 class PhotoStoreException(
   message: String,
   cause: Throwable? = null,
