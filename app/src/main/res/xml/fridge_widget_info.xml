@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One home-screen summary of the fridge.
+
+  updatePeriodMillis keeps the date-relative labels honest while the app is closed. The system
+  clamps it to 30 minutes, which is the shortest period it honours, so nothing refreshes more
+  often than a manual save already does.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_description"
+    android:initialLayout="@layout/fridge_widget"
+    android:maxResizeHeight="480dp"
+    android:maxResizeWidth="480dp"
+    android:minHeight="110dp"
+    android:minResizeHeight="70dp"
+    android:minResizeWidth="180dp"
+    android:minWidth="250dp"
+    android:previewImage="@drawable/fridge_widget_preview"
+    android:previewLayout="@layout/fridge_widget"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="4"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

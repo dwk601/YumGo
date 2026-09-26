@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_label">YumGo fridge</string>
+    <string name="widget_description">Your fridge at a glance, nearest expiry first</string>
+    <string name="widget_title">YumGo</string>
+    <string name="widget_open">Open YumGo</string>
+
+    <string name="widget_summary_empty">Nothing in here yet</string>
+    <string name="widget_summary_calm">Nothing expiring soon</string>
+    <plurals name="widget_summary_use_soon">
+        <item quantity="one">%d to use soon</item>
+        <item quantity="other">%d to use soon</item>
+    </plurals>
+
+    <string name="widget_empty_title">The fridge is quiet</string>
+    <string name="widget_error">Could not load your fridge. Tap to try again.</string>
+    <string name="widget_more_items">+%1$d more</string>
+
+    <string name="widget_item_quantity">%1$s · %2$d</string>
+    <string name="widget_expiry_today">Today</string>
+    <string name="widget_expiry_tomorrow">Tomorrow</string>
+    <plurals name="widget_expiry_in_days">
+        <item quantity="one">In %d day</item>
+        <item quantity="other">In %d days</item>
+    </plurals>
+    <plurals name="widget_expiry_overdue">
+        <item quantity="one">%d day overdue</item>
+        <item quantity="other">%d days overdue</item>
+    </plurals>
+    <string name="widget_expiry_no_date">No date</string>
+</resources>

@@ -1,6 +1,7 @@
 package com.dwk.yumgo.data
 
 import android.content.Context
+import com.dwk.yumgo.widget.FridgeWidgetUpdates
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -18,6 +19,10 @@ import kotlinx.coroutines.flow.flowOn
  *
  * Failures return [Result] and leave existing rows in place. [items] can throw
  * [FridgeStoreException] if a read fails; it does not replace the database.
+ *
+ * Every successful mutation also redraws the placed home-screen widgets. That is a side effect of a
+ * committed write, never a condition for it, so a widget that cannot be reached leaves the [Result]
+ * exactly as the store returned it.
  */
 interface FridgeRepository {
   val items: Flow<List<FridgeItem>>
@@ -58,26 +63,36 @@ class FridgeStoreException(
  * App-scoped repository. Construct once and pass the same instance into the fridge ViewModel.
  */
 class OfflineFridgeRepository(context: Context) : FridgeRepository {
-  private val store = LocalFridgeStore(context.applicationContext)
+  private val appContext = context.applicationContext
+  private val store = LocalFridgeStore(appContext)
 
   override val items: Flow<List<FridgeItem>> = store.items.flowOn(Dispatchers.IO)
 
-  override suspend fun add(item: NewFridgeItem): Result<FridgeItem> = runStore { store.insert(item) }
+  override suspend fun add(item: NewFridgeItem): Result<FridgeItem> =
+    runStore { store.insert(item) }.also { notifyWidgetsOnCommit(it) }
 
-  override suspend fun update(item: FridgeItem): Result<FridgeItem> = runStore { store.update(item) }
+  override suspend fun update(item: FridgeItem): Result<FridgeItem> =
+    runStore { store.update(item) }.also { notifyWidgetsOnCommit(it) }
 
   override suspend fun setQuantity(id: String, quantity: Int): Result<FridgeItem> =
-    runStore { store.setQuantity(id, quantity) }
+    runStore { store.setQuantity(id, quantity) }.also { notifyWidgetsOnCommit(it) }
 
-  override suspend fun delete(id: String): Result<Unit> = runStore { store.softDelete(id) }
+  override suspend fun delete(id: String): Result<Unit> =
+    runStore { store.softDelete(id) }.also { notifyWidgetsOnCommit(it) }
 
-  override suspend fun undoDelete(id: String): Result<FridgeItem> = runStore { store.undoDelete(id) }
+  override suspend fun undoDelete(id: String): Result<FridgeItem> =
+    runStore { store.undoDelete(id) }.also { notifyWidgetsOnCommit(it) }
 
   override suspend fun get(id: String): Result<FridgeItem?> = runStore { store.get(id) }
 
   override suspend fun retainedPhotoRefs(): Result<Set<String>> = runStore { store.retainedPhotoRefs() }
 
   override suspend fun pendingChanges(): Result<List<PendingFridgeChange>> = runStore { store.pendingChanges() }
+
+  /** Redraws the widget after a write, without letting the widget decide the write's fate. */
+  private fun notifyWidgetsOnCommit(result: Result<*>) {
+    if (result.isSuccess) FridgeWidgetUpdates.itemsChanged(appContext)
+  }
 }
 
 private suspend fun <T> runStore(block: suspend () -> T): Result<T> =
