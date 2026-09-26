@@ -1,55 +1,119 @@
 package com.dwk.yumgo.ui.main
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.material3.Text
+import android.content.Context
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation3.runtime.NavKey
-import com.dwk.yumgo.data.DefaultDataRepository
-import com.dwk.yumgo.theme.YumgoTheme
+import com.dwk.yumgo.data.OfflineFridgeRepository
+import com.dwk.yumgo.data.PhotoStore
+import com.dwk.yumgo.ui.photo.PhotoCapture
+import com.dwk.yumgo.ui.photo.rememberPhotoPicker
 
+/**
+ * Fridge destination. One [OfflineFridgeRepository] and one [PhotoStore] are created
+ * with the first ViewModel and reused for the life of that screen, including rotation.
+ */
 @Composable
 fun MainScreen(
-  onItemClick: (NavKey) -> Unit,
   modifier: Modifier = Modifier,
-  viewModel: MainScreenViewModel = viewModel { MainScreenViewModel(DefaultDataRepository()) },
+  viewModel: MainScreenViewModel = fridgeViewModel(),
 ) {
   val state by viewModel.uiState.collectAsStateWithLifecycle()
-  when (state) {
-    MainScreenUiState.Loading -> {
-      // Blank
+  val snackbar = remember { SnackbarHostState() }
+  val context = LocalContext.current.applicationContext
+  val photos = remember(viewModel) { PhotoStoreHolder.photos(context) }
+  val pickPhoto =
+    rememberPhotoPicker(photoStore = photos) { result ->
+      viewModel.onAcquisition(result)
     }
-    is MainScreenUiState.Success -> {
-      MainScreen(data = (state as MainScreenUiState.Success).data, modifier = modifier)
+  LaunchedEffect(viewModel) {
+    viewModel.notices.collect { notice ->
+      val result =
+        snackbar.showSnackbar(
+          message = notice.text,
+          actionLabel = if (notice.undoId != null) "Undo" else null,
+        )
+      if (result == SnackbarResult.ActionPerformed) notice.undoId?.let(viewModel::undoDelete)
     }
-    is MainScreenUiState.Error -> {
-      Text("Error loading data: ${(state as MainScreenUiState.Error).throwable.message}")
-    }
+  }
+  val callbacks =
+    FridgeCallbacks(
+      onQueryChange = viewModel::onQueryChange,
+      onRetry = viewModel::onRetry,
+      onAdd = viewModel::onAdd,
+      onEdit = viewModel::onEdit,
+      onQuantityChange = viewModel::onQuantityChange,
+      onDelete = viewModel::onDelete,
+      onDraftChange = viewModel::onDraftChange,
+      onDismissEditor = viewModel::onDismissEditor,
+      onSave = viewModel::onSave,
+      onTakePhoto = viewModel::onTakePhoto,
+      onPickPhoto = {
+        viewModel.onPickStarted()
+        pickPhoto()
+      },
+      onRemovePhoto = viewModel::onRemovePhoto,
+    )
+  FridgeContent(
+    state = state,
+    callbacks = callbacks,
+    modifier = modifier,
+    snackbarHost = { SnackbarHost(snackbar) },
+    cameraContent = {
+      PhotoCapture(
+        photoStore = photos,
+        onResult = viewModel::onAcquisition,
+        onReviewRef = viewModel::onReviewRef,
+      )
+    },
+  )
+}
+
+@Composable
+private fun fridgeViewModel(): MainScreenViewModel {
+  val appContext = LocalContext.current.applicationContext
+  return viewModel {
+    MainScreenViewModel(
+      repository = PhotoStoreHolder.repository(appContext),
+      photos = PhotoStoreHolder.photos(appContext),
+      savedState = createSavedStateHandle(),
+    )
   }
 }
 
-@Composable
-internal fun MainScreen(data: List<String>, modifier: Modifier = Modifier) {
-  Column(modifier) { data.forEach { Greeting(it) } }
-}
+/**
+ * Process-wide fridge services. The screen ViewModel is created once per navigation entry,
+ * and this holder keeps that same repository and photo store if the activity is recreated
+ * before the ViewModel is.
+ */
+internal object PhotoStoreHolder {
+  @Volatile private var repository: OfflineFridgeRepository? = null
+  @Volatile private var photos: PhotoStore? = null
 
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-  Text(text = "Hello $name!", modifier = modifier)
-}
+  fun repository(context: Context): OfflineFridgeRepository =
+    repository ?: synchronized(this) {
+      repository ?: OfflineFridgeRepository(context.applicationContext).also { repository = it }
+    }
 
-@Preview(showBackground = true)
-@Composable
-fun MainScreenPreview() {
-  YumgoTheme { MainScreen(listOf("Android")) }
-}
+  fun photos(context: Context): PhotoStore =
+    photos ?: synchronized(this) {
+      photos ?: PhotoStore(context.applicationContext).also { photos = it }
+    }
 
-@Preview(showBackground = true, widthDp = 340)
-@Composable
-fun MainScreenPortraitPreview() {
-  YumgoTheme { MainScreen(listOf("Android")) }
+  /** Drops the cached services so the next screen opens a fresh database. Test-only. */
+  fun resetForTests() {
+    synchronized(this) {
+      repository = null
+      photos = null
+    }
+  }
 }
