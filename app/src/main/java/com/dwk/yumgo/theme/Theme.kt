@@ -2,7 +2,6 @@
 
 package com.dwk.yumgo.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
@@ -27,8 +26,13 @@ internal val YumgoShapes =
 /** Spring motion for list, sheet, photo, and save transitions. */
 internal val YumgoMotion: MotionScheme = MotionScheme.expressive()
 
+/**
+ * Yumgo is light-first: the app opens in [LightColorScheme] on a dark device too.
+ * Previews and tests call this with no argument and get the same light palette.
+ * MainActivity reads the saved selection and passes the resolved choice.
+ */
 @Composable
-fun YumgoTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+fun YumgoTheme(darkTheme: Boolean = false, content: @Composable () -> Unit) {
   MaterialExpressiveTheme(
     colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
     motionScheme = YumgoMotion,

@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.Yumgo" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+        Light launch window. The app palette is light-first (see YumgoTheme), so the window
+        before the first frame uses the same paper color instead of flashing white.
+        Same value as LightColorScheme.background in theme/Color.kt.
+    -->
+    <style name="Theme.Yumgo" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFF7F6F2</item>
+    </style>
 </resources>
