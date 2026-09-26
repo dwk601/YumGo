@@ -667,11 +667,11 @@ private fun applyExifOrientation(bitmap: Bitmap, file: File): Bitmap {
         ExifInterface.ORIENTATION_FLIP_VERTICAL -> preScale(1f, -1f)
         ExifInterface.ORIENTATION_TRANSPOSE -> {
           postRotate(90f)
-          preScale(-1f, 1f)
+          postScale(-1f, 1f)
         }
         ExifInterface.ORIENTATION_TRANSVERSE -> {
           postRotate(270f)
-          preScale(-1f, 1f)
+          postScale(-1f, 1f)
         }
         else -> return bitmap
       }

@@ -93,6 +93,24 @@ class FridgeWorkflowTest {
   }
 
   @Test
+  fun delete_recreate_undoRestoresItem() {
+    addButton().performClick()
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Rotate Beans")
+    composeRule.onNodeWithText("Save").performClick()
+    composeRule.waitUntil(10_000) { nodeCount("Rotate Beans") > 0 }
+
+    composeRule.onNodeWithText("Rotate Beans").performClick()
+    composeRule.onNodeWithText("Remove from fridge").performClick()
+    composeRule.waitUntil(10_000) { nodeCount("Undo") > 0 && nodeCount("Rotate Beans") == 0 }
+
+    composeRule.activity.runOnUiThread { composeRule.activity.recreate() }
+    composeRule.waitForIdle()
+    composeRule.onNodeWithText("Undo").assertIsDisplayed().performClick()
+    composeRule.waitUntil(10_000) { nodeCount("Rotate Beans") > 0 }
+    composeRule.onNodeWithText("Rotate Beans").assertIsDisplayed()
+  }
+
+  @Test
   fun draftSurvivesRecreation_andSaveStaysAboveKeyboard() {
     addButton().performClick()
     composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Draft Cheese")

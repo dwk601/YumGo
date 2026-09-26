@@ -28,6 +28,7 @@ fun MainScreen(
   viewModel: MainScreenViewModel = fridgeViewModel(),
 ) {
   val state by viewModel.uiState.collectAsStateWithLifecycle()
+  val pendingUndo by viewModel.pendingUndoState.collectAsStateWithLifecycle()
   val snackbar = remember { SnackbarHostState() }
   val context = LocalContext.current.applicationContext
   val photos = remember(viewModel) { PhotoStoreHolder.photos(context) }
@@ -35,15 +36,16 @@ fun MainScreen(
     rememberPhotoPicker(photoStore = photos) { result ->
       viewModel.onAcquisition(result)
     }
-  LaunchedEffect(viewModel) {
-    viewModel.notices.collect { notice ->
-      val result =
-        snackbar.showSnackbar(
-          message = notice.text,
-          actionLabel = if (notice.undoId != null) "Undo" else null,
-        )
-      if (result == SnackbarResult.ActionPerformed) notice.undoId?.let(viewModel::undoDelete)
+  LaunchedEffect(pendingUndo?.id) {
+    val pending = pendingUndo ?: return@LaunchedEffect
+    val result = snackbar.showSnackbar(message = "${pending.name} removed", actionLabel = "Undo")
+    when (result) {
+      SnackbarResult.ActionPerformed -> viewModel.confirmUndo(pending.id)
+      SnackbarResult.Dismissed -> viewModel.dismissUndo(pending.id)
     }
+  }
+  LaunchedEffect(viewModel) {
+    viewModel.notices.collect { notice -> snackbar.showSnackbar(message = notice.text) }
   }
   val callbacks =
     FridgeCallbacks(

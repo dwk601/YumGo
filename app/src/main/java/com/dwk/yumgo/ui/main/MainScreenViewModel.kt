@@ -43,6 +43,10 @@ class MainScreenViewModel(
   private val acquisitionActive = AtomicBoolean(cameraOpen.value)
   private var reviewRef: String? = null
   private var observeJob: Job? = null
+  private val pendingUndo = MutableStateFlow(readPendingUndo())
+
+  /** Latest delete that can still be undone. Survives recreation until Undo or dismiss. */
+  val pendingUndoState: StateFlow<PendingUndo?> = pendingUndo
 
   val notices = MutableSharedFlow<FridgeNotice>(extraBufferCapacity = 4)
 
@@ -155,19 +159,28 @@ class MainScreenViewModel(
             draft.value = null
             persistDraft()
           }
-          notices.emit(FridgeNotice("$name removed", undoId = id))
+          setPendingUndo(id, name)
         },
         onFailure = { error -> notices.emit(FridgeNotice(error.message ?: "Couldn't remove the item")) },
       )
     }
   }
 
-  fun undoDelete(id: String) {
+  /** User chose Undo. Ignores a stale id after a newer delete replaced the snackbar. */
+  fun confirmUndo(id: String) {
+    if (pendingUndo.value?.id != id) return
+    clearPendingUndo()
     viewModelScope.launch {
       repository.undoDelete(id).onFailure { error ->
         notices.emit(FridgeNotice(error.message ?: "Couldn't undo"))
       }
     }
+  }
+
+  /** User dismissed the snackbar. A cancelled composition must not call this. */
+  fun dismissUndo(id: String) {
+    if (pendingUndo.value?.id != id) return
+    clearPendingUndo()
   }
 
   fun onSave() {
@@ -211,7 +224,7 @@ class MainScreenViewModel(
     val current = draft.value ?: return
     if (current.saving) return
     val previous = current.photoRef
-    draft.value = current.copy(photoRef = null, errorMessage = null)
+    draft.value = current.copy(photoRef = null, photoMessage = null)
     persistDraft()
     if (previous != null) viewModelScope.launch { discardIfUnprotected(previous) }
   }
@@ -241,7 +254,7 @@ class MainScreenViewModel(
     when (result) {
       is PhotoAcquisition.Staged -> {
         val previous = current.photoRef
-        draft.value = current.copy(photoRef = result.ref, errorMessage = null, saving = false)
+        draft.value = current.copy(photoRef = result.ref, errorMessage = null, photoMessage = null, saving = false)
         persistDraft()
         if (previous != null && previous != result.ref) {
           viewModelScope.launch { discardIfUnprotected(previous) }
@@ -249,8 +262,12 @@ class MainScreenViewModel(
       }
       PhotoAcquisition.Cancelled -> Unit
       PhotoAcquisition.PermissionDenied ->
-        draft.value = current.copy(errorMessage = "Camera permission was not granted. You can type the item instead.", saving = false)
-      is PhotoAcquisition.Failed -> draft.value = current.copy(errorMessage = result.message, saving = false)
+        draft.value =
+          current.copy(
+            photoMessage = "Camera permission was not granted. You can type the item instead.",
+            saving = false,
+          )
+      is PhotoAcquisition.Failed -> draft.value = current.copy(photoMessage = result.message, saving = false)
     }
     if (result !is PhotoAcquisition.Staged) persistDraft()
     if (!cameraOpen.value) viewModelScope.launch { cleanupIfIdle() }
@@ -350,6 +367,7 @@ class MainScreenViewModel(
       savedState.remove<Int>(KEY_DRAFT_QTY)
       savedState.remove<Long>(KEY_DRAFT_EXPIRY)
       savedState.remove<String>(KEY_DRAFT_PHOTO)
+      savedState.remove<String>(KEY_DRAFT_PHOTO_MESSAGE)
       return
     }
     if (current.id == null) savedState.remove<String>(KEY_DRAFT_ID) else savedState[KEY_DRAFT_ID] = current.id
@@ -357,6 +375,7 @@ class MainScreenViewModel(
     savedState[KEY_DRAFT_QTY] = current.quantity
     if (current.expiryEpochDay == null) savedState.remove<Long>(KEY_DRAFT_EXPIRY) else savedState[KEY_DRAFT_EXPIRY] = current.expiryEpochDay
     if (current.photoRef == null) savedState.remove<String>(KEY_DRAFT_PHOTO) else savedState[KEY_DRAFT_PHOTO] = current.photoRef
+    if (current.photoMessage == null) savedState.remove<String>(KEY_DRAFT_PHOTO_MESSAGE) else savedState[KEY_DRAFT_PHOTO_MESSAGE] = current.photoMessage
   }
 
   private fun readDraft(): Editable? {
@@ -367,7 +386,26 @@ class MainScreenViewModel(
       quantity = savedState.get<Int>(KEY_DRAFT_QTY) ?: 1,
       expiryEpochDay = savedState.get<Long>(KEY_DRAFT_EXPIRY),
       photoRef = savedState.get<String>(KEY_DRAFT_PHOTO),
+      photoMessage = savedState.get<String>(KEY_DRAFT_PHOTO_MESSAGE),
     )
+  }
+
+  private fun readPendingUndo(): PendingUndo? {
+    val id = savedState.get<String>(KEY_UNDO_ID) ?: return null
+    val name = savedState.get<String>(KEY_UNDO_NAME) ?: return null
+    return PendingUndo(id, name)
+  }
+
+  private fun setPendingUndo(id: String, name: String) {
+    savedState[KEY_UNDO_ID] = id
+    savedState[KEY_UNDO_NAME] = name
+    pendingUndo.value = PendingUndo(id, name)
+  }
+
+  private fun clearPendingUndo() {
+    savedState.remove<String>(KEY_UNDO_ID)
+    savedState.remove<String>(KEY_UNDO_NAME)
+    pendingUndo.value = null
   }
 
   private fun initialState(): FridgeUiState {
@@ -398,6 +436,7 @@ class MainScreenViewModel(
       photoReference = photoRef?.let { paths[it] },
       saving = saving,
       errorMessage = errorMessage,
+      photoMessage = photoMessage,
     )
 
   private data class Editable(
@@ -408,6 +447,7 @@ class MainScreenViewModel(
     val photoRef: String?,
     val saving: Boolean = false,
     val errorMessage: String? = null,
+    val photoMessage: String? = null,
   )
 
   private companion object {
@@ -419,10 +459,17 @@ class MainScreenViewModel(
     const val KEY_DRAFT_QTY = "draft_qty"
     const val KEY_DRAFT_EXPIRY = "draft_expiry"
     const val KEY_DRAFT_PHOTO = "draft_photo"
+    const val KEY_DRAFT_PHOTO_MESSAGE = "draft_photo_message"
+    const val KEY_UNDO_ID = "undo_id"
+    const val KEY_UNDO_NAME = "undo_name"
   }
 }
 
+data class PendingUndo(
+  val id: String,
+  val name: String,
+)
+
 data class FridgeNotice(
   val text: String,
-  val undoId: String? = null,
 )

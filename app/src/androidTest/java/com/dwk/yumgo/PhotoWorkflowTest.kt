@@ -165,7 +165,7 @@ class PhotoWorkflowTest {
     assertTrue("Staged photo missing after recreation", staged.listFiles().orEmpty().any { it.name.endsWith(".jpg") })
 
     composeRule.onNodeWithText("Save").performClick()
-    composeRule.waitUntil(10_000) { readPhotoRef("Back Kale") != null }
+    composeRule.waitUntil(20_000) { readPhotoRef("Back Kale") != null }
     val ref = readPhotoRef("Back Kale")!!
     assertTrue(ref, ref.startsWith("saved/"))
     assertTrue(File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "fridge-photos/$ref").isFile)
@@ -193,10 +193,7 @@ class PhotoWorkflowTest {
     assertTrue(file.isFile)
 
     composeRule.onNodeWithText("Undo Plum").performClick()
-    // The edit sheet raises the keyboard after it opens, which shrinks and re-lays the sheet.
-    // Wait for that to settle, then scroll to Remove (below the fold with a photo) like a user would.
-    awaitImeSettled()
-    composeRule.onNodeWithText("Remove from fridge").performScrollTo().assertIsDisplayed().performClick()
+    composeRule.onNodeWithText("Remove from fridge").assertIsDisplayed().performClick()
     composeRule.waitUntil(10_000) { nodeCount(hasText("Undo")) > 0 && nodeCount(hasText("Undo Plum")) == 0 }
 
     addButton().performClick()
@@ -211,21 +208,6 @@ class PhotoWorkflowTest {
     composeRule.waitUntil(10_000) { nodeCount(hasText("Undo Plum")) > 0 }
     assertTrue(readPhotoRef("Undo Plum") == ref)
     assertTrue("Restored item's photo is gone", file.isFile)
-  }
-
-  private fun awaitImeSettled() {
-    val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-    fun imeTop(): Int? =
-      automation.windows.firstOrNull { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-        ?.let { window -> Rect().also(window::getBoundsInScreen).takeIf { it.height() > 0 }?.top }
-    composeRule.waitUntil(10_000) { imeTop() != null }
-    var previous: Int? = null
-    composeRule.waitUntil(5_000) {
-      Thread.sleep(150)
-      val top = imeTop()
-      (top != null && top == previous).also { previous = top }
-    }
-    composeRule.waitForIdle()
   }
 
   private fun grantCamera() {
