@@ -250,6 +250,23 @@ class FridgeContentWorkflowTest {
   }
 
   @Test
+  fun photoMessage_showsUnderPhotoWithoutFlaggingName() {
+    val message = "Camera permission was not granted. You can type the item instead."
+    state =
+      state.copy(
+        items = listOf(FridgeItemUi("milk", "Milk", 1, null, null)),
+        draft = ItemDraft(null, "Kale", 1, null, null, photoMessage = message),
+      )
+    rule.waitForIdle()
+    val name = rule.onNode(hasSetTextAction() and hasText("Name")).fetchSemanticsNode()
+    assertFalse("Photo message flagged Name as an error", name.config.contains(SemanticsProperties.Error))
+    val photoLabel = rule.onNodeWithText("Photo").fetchSemanticsNode()
+    val shown = rule.onNodeWithText(message).assertIsDisplayed().fetchSemanticsNode()
+    assertTrue("Photo message is not under Photo", shown.positionOnScreen.y > photoLabel.positionOnScreen.y)
+    rule.onNodeWithText("Save").assertIsEnabled()
+  }
+
+  @Test
   fun addButton_hasAccessibleName() {
     state = state.copy(items = listOf(FridgeItemUi("milk", "Milk", 1, null, null)))
     rule.waitForIdle()
@@ -259,6 +276,7 @@ class FridgeContentWorkflowTest {
       merged.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() } +
         merged.config.getOrElse(SemanticsProperties.Text) { emptyList() }.map { it.text }
     assertTrue("Add button is announced without a label: $spoken", spoken.any { it == "Add" })
+    assertEquals("Add button label is announced more than once: $spoken", 1, spoken.count { it == "Add" })
   }
 
   /** Add FAB located through its visible label, independent of how its semantics are merged. */
