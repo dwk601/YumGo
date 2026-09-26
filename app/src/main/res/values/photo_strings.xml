@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="photo_take">Take photo</string>
+    <string name="photo_use">Use photo</string>
+    <string name="photo_retake">Retake</string>
+    <string name="photo_cancel">Cancel</string>
+    <string name="photo_type_instead">Type instead</string>
+    <string name="photo_permission_continue">Continue</string>
+    <string name="photo_permission_rationale">The camera is only used to photograph this item. You can type it in instead.</string>
+    <string name="photo_permission_waiting">Waiting for camera permission.</string>
+    <string name="photo_permission_denied">Camera permission was not granted. You can type the item instead.</string>
+    <string name="photo_camera_unavailable">No camera is available on this device. You can type the item instead.</string>
+    <string name="photo_camera_failed">The camera could not be opened. You can type the item instead.</string>
+    <string name="photo_capture_failed">The photo could not be saved. Try again, or type the item.</string>
+    <string name="photo_picker_failed">That photo could not be used. You can type the item instead.</string>
+    <string name="photo_preview_description">Live camera preview</string>
+    <string name="photo_review_description">Photo ready to keep or retake</string>
+</resources>
