@@ -110,6 +110,41 @@ class FridgeWorkflowTest {
     composeRule.onNodeWithText("Rotate Beans").assertIsDisplayed()
   }
 
+  /**
+   * Two quick deletes: only the latest delete is offered for Undo (one snackbar), Undo restores
+   * that item, and the earlier item stays removed. The offer survives recreation and is gone
+   * after Undo, including after another recreation.
+   */
+  @Test
+  fun rapidSecondDelete_undoRestoresLatestOnly() {
+    for (name in listOf("First Figs", "Second Grapes")) {
+      addButton().performClick()
+      composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput(name)
+      composeRule.onNodeWithText("Save").performClick()
+      composeRule.waitUntil(10_000) { nodeCount(name) > 0 }
+    }
+    for (name in listOf("First Figs", "Second Grapes")) {
+      composeRule.onNodeWithText(name).performClick()
+      composeRule.onNodeWithText("Remove from fridge").performClick()
+      composeRule.waitUntil(10_000) { nodeCount(name) == 0 && nodeCount("$name removed") > 0 }
+    }
+    composeRule.onNodeWithText("First Figs removed").assertDoesNotExist()
+    org.junit.Assert.assertEquals(1, nodeCount("Undo"))
+
+    composeRule.activity.runOnUiThread { composeRule.activity.recreate() }
+    composeRule.waitForIdle()
+    composeRule.waitUntil(10_000) { nodeCount("Second Grapes removed") > 0 }
+    composeRule.onNodeWithText("Undo").performClick()
+    composeRule.waitUntil(10_000) { nodeCount("Second Grapes") > 0 }
+    org.junit.Assert.assertEquals(0, nodeCount("First Figs"))
+    composeRule.waitUntil(5_000) { nodeCount("Undo") == 0 }
+
+    composeRule.activity.runOnUiThread { composeRule.activity.recreate() }
+    composeRule.waitForIdle()
+    composeRule.waitUntil(10_000) { nodeCount("Second Grapes") > 0 }
+    org.junit.Assert.assertEquals("Undo came back after it was used", 0, nodeCount("Undo"))
+  }
+
   @Test
   fun draftSurvivesRecreation_andSaveStaysAboveKeyboard() {
     addButton().performClick()

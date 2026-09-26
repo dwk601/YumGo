@@ -122,6 +122,10 @@ class PhotoWorkflowTest {
       composeRule.onAllNodes(hasText("Add to the fridge")).fetchSemanticsNodes().isNotEmpty()
     }
     composeRule.onNode(hasSetTextAction() and hasText("Denied", substring = true)).assertIsDisplayed()
+    // The denial is a neutral photo message under Photo, not an error on the typed name.
+    composeRule.onNodeWithText("Camera permission was not granted. You can type the item instead.").assertIsDisplayed()
+    val name = composeRule.onNode(hasSetTextAction() and hasText("Denied", substring = true)).fetchSemanticsNode()
+    assertTrue("Denial flagged Name as an error", !name.config.contains(androidx.compose.ui.semantics.SemanticsProperties.Error))
     composeRule.onNode(hasSetTextAction() and hasText("Denied", substring = true)).performTextReplacement("Denied Oats")
     composeRule.onNodeWithText("Save").performClick()
     composeRule.waitUntil(15_000) { composeRule.onAllNodes(hasText("Denied Oats")).fetchSemanticsNodes().isNotEmpty() }
@@ -164,8 +168,11 @@ class PhotoWorkflowTest {
     val staged = File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "fridge-photos/staged")
     assertTrue("Staged photo missing after recreation", staged.listFiles().orEmpty().any { it.name.endsWith(".jpg") })
 
-    composeRule.onNodeWithText("Save").performClick()
-    composeRule.waitUntil(20_000) { readPhotoRef("Back Kale") != null }
+    // A recreated new draft reopens its sheet, focuses Name, and raises the keyboard, which moves
+    // Save. Tap Save once that real keyboard layout has settled, as a user would.
+    awaitImeSettled()
+    composeRule.onNodeWithText("Save").assertIsDisplayed().performClick()
+    composeRule.waitUntil(10_000) { readPhotoRef("Back Kale") != null }
     val ref = readPhotoRef("Back Kale")!!
     assertTrue(ref, ref.startsWith("saved/"))
     assertTrue(File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "fridge-photos/$ref").isFile)
@@ -208,6 +215,21 @@ class PhotoWorkflowTest {
     composeRule.waitUntil(10_000) { nodeCount(hasText("Undo Plum")) > 0 }
     assertTrue(readPhotoRef("Undo Plum") == ref)
     assertTrue("Restored item's photo is gone", file.isFile)
+  }
+
+  private fun awaitImeSettled() {
+    val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+    fun imeTop(): Int? =
+      automation.windows.firstOrNull { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+        ?.let { window -> Rect().also(window::getBoundsInScreen).takeIf { it.height() > 0 }?.top }
+    composeRule.waitUntil(10_000) { imeTop() != null }
+    var previous: Int? = null
+    composeRule.waitUntil(5_000) {
+      Thread.sleep(150)
+      val top = imeTop()
+      (top != null && top == previous).also { previous = top }
+    }
+    composeRule.waitForIdle()
   }
 
   private fun grantCamera() {
