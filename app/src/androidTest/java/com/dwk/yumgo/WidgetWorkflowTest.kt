@@ -1,10 +1,12 @@
 package com.dwk.yumgo
 
+import android.app.Activity
 import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Bundle
@@ -26,18 +28,24 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
+import com.dwk.yumgo.data.FridgeRepository
 import com.dwk.yumgo.data.NewFridgeItem
 import com.dwk.yumgo.data.SettingsServices
 import com.dwk.yumgo.data.ThemeMode
 import com.dwk.yumgo.ui.main.PhotoStoreHolder
 import com.dwk.yumgo.widget.FridgeWidgetData
 import com.dwk.yumgo.widget.FridgeWidgetProvider
+import java.io.File
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -46,9 +54,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.Description
 import org.junit.runner.RunWith
 import org.junit.rules.RuleChain
 import org.junit.rules.TestRule
+import org.junit.rules.TestWatcher
 
 /**
  * The home-screen widget, held for real.
@@ -65,7 +75,7 @@ import org.junit.rules.TestRule
 class WidgetWorkflowTest {
   private val composeRule = createAndroidComposeRule<MainActivity>()
 
-  @get:Rule val rule: TestRule = RuleChain.outerRule(WipeFridgeRule()).around(composeRule)
+  @get:Rule val rule: TestRule = RuleChain.outerRule(ClearFridgeForWidgetRule()).around(composeRule)
 
   private lateinit var host: AppWidgetHost
   private var widgetId = AppWidgetManager.INVALID_APPWIDGET_ID
@@ -83,8 +93,6 @@ class WidgetWorkflowTest {
     )
     // Only a launcher may bind a widget out of the box. This is the grant a launcher already has.
     shell("appwidget grantbind --package ${context.packageName} --user 0")
-    // The wipe rule deletes the database file, so the widget's cached connection has to go too.
-    dropWidgetRepository()
     composeRule.runOnUiThread { host = AppWidgetHost(context, HostId) }
     composeRule.runOnUiThread { host.startListening() }
     composeRule.runOnUiThread { widgetId = host.allocateAppWidgetId() }
@@ -93,6 +101,10 @@ class WidgetWorkflowTest {
     val info = manager.getAppWidgetInfo(widgetId)
     assertNotNull("A bound widget must resolve to provider info", info)
     composeRule.runOnUiThread { widget = host.createView(context, widgetId, info!!) }
+    // Each test starts from a size the test chose. The system hands a re-bound host whatever it
+    // had last, so a test that resized the card would otherwise decide the next one's row count.
+    resize(minWidthDp = 250, minHeightDp = 200)
+    awaitWidget(15_000) { startColumn().childCount >= 0 }
     // The app must see its own instance, or a saved write would never redraw the card.
     awaitWidget(10_000) { FridgeWidgetProvider.placedIds(context()).contains(widgetId) }
   }
@@ -329,6 +341,105 @@ class WidgetWorkflowTest {
     composeRule.waitForIdle()
   }
 
+  /**
+   * A tap from a cold app: the activity is closed first, so the widget has to start it, and what
+   * comes back is a new activity showing the saved fridge.
+   */
+  @Test
+  fun widgetTap_opensTheAppWhenItIsNotRunning() {
+    add("Cold Tap Jam", days = 1)
+    awaitWidget { rows().isNotEmpty() }
+    val before = System.identityHashCode(composeRule.activity)
+    composeRule.activityRule.scenario.close()
+    Thread.sleep(1_000)
+    assertTrue("The app should not be on screen any more", resumedActivities().none { it is MainActivity })
+
+    val root = requireNotNull(widget).findViewById<View>(R.id.fridge_widget_root)
+    composeRule.runOnUiThread { root.performClick() }
+
+    val opened = awaitMainActivity(20_000)
+    assertTrue("The widget handed back the activity it was holding", System.identityHashCode(opened) != before)
+    assertTrue("The new activity is not a finished one", !opened.isFinishing)
+    // The new instance is on the fridge, with the item the card was showing.
+    assertTrue("The reopened app did not show the fridge", awaitComposeText("Cold Tap Jam", 15_000))
+    opened.finish()
+  }
+
+  /**
+   * Waits for a piece of text to be on screen, wherever its window came from. The reopened
+   * activity is started by the widget, not by the test rule, so it has no scenario of its own.
+   */
+  private fun awaitComposeText(text: String, timeoutMillis: Long): Boolean {
+    val deadline = System.currentTimeMillis() + timeoutMillis
+    while (System.currentTimeMillis() < deadline) {
+      val found =
+        runCatching { composeRule.onAllNodes(hasText(text)).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false)
+      if (found) return true
+      Thread.sleep(500)
+    }
+    return false
+  }
+
+  /** A restart of the app does not lose the card: a later save still reaches it. */
+  @Test
+  fun widgetRefresh_continuesAfterTheAppRestarts() {
+    add("First Load Rice", days = 5)
+    awaitWidget { rows().isNotEmpty() }
+    assertEquals("First Load Rice", rowName(0))
+
+    // Close the app and open it again, so the screen runs on a brand new repository.
+    composeRule.activityRule.scenario.close()
+    PhotoStoreHolder.resetForTests()
+    ActivityScenario.launch(MainActivity::class.java).use {
+      composeRule.waitForIdle()
+      composeRule.waitUntil(15_000) {
+        composeRule.onAllNodes(hasText("First Load Rice")).fetchSemanticsNodes().isNotEmpty()
+      }
+    }
+
+    add("Second Load Rice", days = 2)
+    awaitWidget { rows().size == 2 }
+    assertEquals("The new save is nearest first", "Second Load Rice", rowName(0))
+    assertEquals("The card forgot the item from before the restart", "First Load Rice", rowName(1))
+  }
+
+  /**
+   * The update the system schedules while nothing of the app is on screen: the card is redrawn from
+   * the local copy, and where the device lets the clock move, the labels follow the new day.
+   */
+  @Test
+  fun scheduledUpdate_redrawsTheCardWhileTheAppIsClosed() {
+    add("Use Me Soon", days = 1)
+    awaitWidget { rows().size == 1 }
+    assertEquals("Tomorrow", rowLabel(0))
+
+    composeRule.activityRule.scenario.close()
+    Thread.sleep(500)
+    assertTrue("The app should be closed for this check", resumedActivities().none { it is MainActivity })
+
+    val epoch = deviceEpoch()
+    val autoTime = deviceSetting("global", "auto_time")
+    val wanted = LocalDate.now().plusDays(2).toEpochDay()
+    deviceSetting("global", "auto_time", "0")
+    val clockMoved = shiftClock(epoch + TwoDaysSeconds, wanted)
+    try {
+      // The broadcast the system's periodic update delivers, with nothing of the app showing.
+      sendScheduledUpdate()
+      if (clockMoved) {
+        awaitWidget(20_000) { rowLabel(0) == "1 day overdue" }
+        assertEquals("The closed-app update kept the label from before the clock moved", "1 day overdue", rowLabel(0))
+      } else {
+        // A read-only emulator refuses to move the clock, so the same update is checked as it is.
+        awaitWidget(10_000) { rowLabel(0) == "Tomorrow" }
+        assertEquals("Tomorrow", rowLabel(0))
+      }
+      assertEquals("1 to use soon", summaryText())
+    } finally {
+      shiftClock(epoch)
+      deviceSetting("global", "auto_time", autoTime)
+    }
+  }
+
   // ------------------------------------------------------------- rendering --
 
   /** Every drawn row, in the order the card shows them. */
@@ -388,6 +499,64 @@ class WidgetWorkflowTest {
   // ------------------------------------------------------------- mutations --
 
   private fun context(): Context = InstrumentationRegistry.getInstrumentation().targetContext
+
+  private fun today(): Long = LocalDate.now().toEpochDay()
+
+  /** Activity state is the framework's to answer, and it only answers on the main thread. */
+  private fun onMainThread(block: () -> Unit) {
+    InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
+  }
+
+  private fun resumedActivities(): List<Activity> {
+    var activities: List<Activity> = emptyList()
+    onMainThread { activities = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).toList() }
+    return activities
+  }
+
+  private fun awaitMainActivity(timeoutMillis: Long): MainActivity {
+    val deadline = System.currentTimeMillis() + timeoutMillis
+    while (System.currentTimeMillis() < deadline) {
+      resumedActivities().filterIsInstance<MainActivity>().firstOrNull()?.let { return it }
+      Thread.sleep(250)
+    }
+    throw AssertionError("The widget never brought the app back; resumed: ${resumedActivities()}")
+  }
+
+  /** The device clock and its own settings, read the way a person would change them. */
+  private fun deviceSetting(namespace: String, key: String): String =
+    shell("settings get $namespace $key").trim()
+
+  private fun deviceSetting(namespace: String, key: String, value: String) {
+    shell("settings put $namespace $key $value")
+  }
+
+  private fun deviceEpoch(): Long = shell("date +%s").trim().toLong()
+
+  /**
+   * Moves the device clock and waits for the process to be living in the new day. Reports whether
+   * the day actually changed, because a read-only emulator refuses the request.
+   */
+  private fun shiftClock(epochSeconds: Long, wantedEpochDay: Long? = null): Boolean {
+    shell("date -s @$epochSeconds")
+    if (wantedEpochDay == null) return false
+    val deadline = System.currentTimeMillis() + 10_000
+    while (System.currentTimeMillis() < deadline) {
+      if (today() == wantedEpochDay) return true
+      Thread.sleep(500)
+    }
+    return false
+  }
+
+  /** The system widget update, delivered to the provider the way a launcher delivers it. */
+  private fun sendScheduledUpdate() {
+    val context = context()
+    context.sendBroadcast(
+      Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE).apply {
+        component = ComponentName(context, FridgeWidgetProvider::class.java)
+        putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, intArrayOf(widgetId))
+      },
+    )
+  }
 
   private fun add(name: String, days: Long?) {
     runBlocking {
@@ -457,21 +626,33 @@ class WidgetWorkflowTest {
     return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255.0
   }
 
-  /**
-   * The widget keeps its own repository for the life of the process. The wipe rule deletes the
-   * database file between tests, so the cached connection has to be dropped with it.
-   */
-  private fun dropWidgetRepository() {
-    val field = FridgeWidgetData::class.java.getDeclaredField("repository")
-    field.isAccessible = true
-    field.set(FridgeWidgetData, null)
-  }
-
   private companion object {
     /** Stable for the app's own uid, which is what identifies a widget host. */
     const val HostId = 21
     const val DraftName = "Half typed"
     const val CardProbeWidth = 420
     const val CardProbeHeight = 240
+    const val TwoDaysSeconds = 2 * 24 * 60 * 60L
+  }
+}
+
+/**
+ * Starts each widget test with an empty fridge.
+ *
+ * The card and the screen read the local copy through two repositories that are cached for the
+ * life of the process, so rows are cleared through both of them instead of deleting the file,
+ * which would leave one of them reading a copy the other cannot see.
+ */
+internal class ClearFridgeForWidgetRule : TestWatcher() {
+  override fun starting(description: Description) {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    PhotoStoreHolder.resetForTests()
+    File(context.filesDir, "fridge-photos").deleteRecursively()
+    clear(PhotoStoreHolder.repository(context))
+    clear(FridgeWidgetData.repository(context))
+  }
+
+  private fun clear(repository: FridgeRepository) = runBlocking {
+    repository.items.first().forEach { repository.delete(it.id) }
   }
 }

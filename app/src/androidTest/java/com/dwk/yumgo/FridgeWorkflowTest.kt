@@ -1,6 +1,9 @@
 package com.dwk.yumgo
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.res.Configuration
+import android.content.res.Configuration.ORIENTATION_LANDSCAPE
+import android.content.res.Configuration.ORIENTATION_PORTRAIT
 import android.database.sqlite.SQLiteDatabase
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityWindowInfo
@@ -21,6 +24,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.io.FileInputStream
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.FixMethodOrder
 import org.junit.Rule
@@ -213,6 +218,70 @@ class FridgeWorkflowTest {
     composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().performClick()
     composeRule.waitUntil(15_000) { nodeCount("Rotate Eggs") > 0 }
     composeRule.onNodeWithText("Rotate Eggs").assertIsDisplayed()
+  }
+
+  /**
+   * A real rotation, taken the way a person takes it: auto-rotate off and the display turned. The
+   * activity is rebuilt for the new shape, and the draft being typed and a usable Save come back
+   * with it. Both device settings are put back.
+   */
+  @Test
+  fun realRotation_keepsTheOpenEditorAndTheFridge() {
+    val autoRotate = deviceSetting("system", "accelerometer_rotation")
+    val rotation = deviceSetting("system", "user_rotation")
+    try {
+      deviceSetting("system", "accelerometer_rotation", "0")
+      addButton().performClick()
+      composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Turned Eggs")
+      composeRule.waitUntil(5_000) { nodeCount("Turned Eggs") > 0 }
+
+      rotateDisplay(1)
+      composeRule.waitUntil(20_000) { nodeCount("Turned Eggs") > 0 && orientation() == ORIENTATION_LANDSCAPE }
+      assertEquals("The app did not follow the display", ORIENTATION_LANDSCAPE, orientation())
+      composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled()
+      val name = composeRule.onNode(hasSetTextAction() and hasText("Turned Eggs", substring = true))
+      name.performScrollTo().assertIsDisplayed()
+      composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().performClick()
+      composeRule.waitUntil(20_000) { nodeCount("Turned Eggs") > 0 }
+
+      rotateDisplay(0)
+      composeRule.waitUntil(20_000) { nodeCount("Turned Eggs") > 0 && orientation() == ORIENTATION_PORTRAIT }
+      assertEquals("The app did not follow the display back", ORIENTATION_PORTRAIT, orientation())
+      composeRule.onNodeWithText("Turned Eggs").assertIsDisplayed()
+      // One more turn each way, then a quiet period: a screen that was being rebuilt over and over
+      // would come back as a different instance with nothing left to do.
+      rotateDisplay(1)
+      rotateDisplay(0)
+      composeRule.waitUntil(20_000) { orientation() == ORIENTATION_PORTRAIT }
+      val settled = composeRule.activity
+      Thread.sleep(4_000)
+      composeRule.waitForIdle()
+      assertEquals(
+        "The activity was rebuilt again while nothing was happening",
+        System.identityHashCode(settled),
+        System.identityHashCode(composeRule.activity),
+      )
+    } finally {
+      deviceSetting("system", "user_rotation", rotation)
+      deviceSetting("system", "accelerometer_rotation", autoRotate)
+    }
+  }
+
+  /** Turns the display and waits for the app to be built for the new shape. */
+  private fun rotateDisplay(rotation: Int) {
+    deviceSetting("system", "user_rotation", rotation.toString())
+    composeRule.waitForIdle()
+  }
+
+  private fun orientation(): Int? =
+    runCatching { composeRule.activity.resources.configuration.orientation }.getOrNull()
+
+  private fun deviceSetting(namespace: String, key: String): String =
+    shell("settings get $namespace $key").trim()
+
+  private fun deviceSetting(namespace: String, key: String, value: String) {
+    shell("settings put $namespace $key $value")
+    Thread.sleep(500)
   }
 
   private fun readQuantity(name: String): Int? {

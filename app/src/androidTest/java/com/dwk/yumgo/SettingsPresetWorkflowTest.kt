@@ -1,5 +1,7 @@
 package com.dwk.yumgo
 
+import android.database.sqlite.SQLiteDatabase
+import android.content.Context
 import android.graphics.BitmapFactory
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
@@ -88,11 +90,11 @@ class SettingsPresetWorkflowTest {
     tapPreset("Fish")
     assertDraftName("Fish")
     assertExpiryLabel("In 2 days")
-    assertEquals("A chip must not save anything", 0, savedItems())
+    assertTrue("A chip must not save anything, but the fridge holds ${savedItemNames()}", savedItemNames().isEmpty())
 
     tapInEditor("Clear expiry date")
     assertExpiryLabel("No expiry")
-    assertEquals("A chip must not save anything", 0, savedItems())
+    assertTrue("A chip must not save anything, but the fridge holds ${savedItemNames()}", savedItemNames().isEmpty())
 
     // A date the user picks by hand.
     tapInEditor("Choose expiry date")
@@ -296,6 +298,38 @@ class SettingsPresetWorkflowTest {
   }
 
   /**
+   * Settings with the system back gesture, seen as a person sees it: the screen that is on top, the
+   * frame part way through the gesture, and the fridge underneath once the gesture finishes.
+   */
+  @Test
+  fun settingsBackGesture_showsTheFridgeUnderneath() {
+    add("Gesture Milk")
+    openSettings()
+    dumpScreen("t5-back-1-settings")
+    val (width, height) = displaySize()
+    val y = height / 2
+    // The gesture is held part way so the frame in between can be looked at, then finished.
+    shell("input motionevent DOWN 2 $y")
+    try {
+      val steps = 6
+      for (step in 1..steps) {
+        shell("input motionevent MOVE ${(2 + (width - 120) * step / steps)} $y")
+        Thread.sleep(60)
+      }
+      Thread.sleep(300)
+      dumpScreen("t5-back-2-mid-gesture")
+    } finally {
+      shell("input motionevent MOVE $width $y")
+      shell("input motionevent UP $width $y")
+    }
+    composeRule.waitForIdle()
+    Thread.sleep(800)
+    dumpScreen("t5-back-3-fridge")
+    eventually { composeRule.onNodeWithText("Settings").assertDoesNotExist() }
+    composeRule.onNodeWithText("Gesture Milk").assertIsDisplayed()
+  }
+
+  /**
    * Settings is a real back-stack entry: it survives a configuration change, the system back
    * gesture brings the fridge back, and the whole round trip works with animations switched off as
    * well as on.
@@ -316,6 +350,7 @@ class SettingsPresetWorkflowTest {
       composeRule.onNodeWithText("Rotation Milk").assertIsDisplayed()
     } finally {
       setAnimatorDurationScale(1.0)
+      restoreAnimationScales()
     }
 
     // And the same round trip with the expressive motion on.
@@ -329,7 +364,10 @@ class SettingsPresetWorkflowTest {
   }
 
   private fun setAnimatorDurationScale(scale: Double) {
+    // The device's own values are put back, so a run leaves the animation setting as it was. The
+    // first call is the one that remembers them, not the call that puts the setting back.
     val value = if (scale == 0.0) "0" else "1"
+    if (animationScalesToRestore == null) animationScalesToRestore = animationScales()
     shell("settings put global animator_duration_scale $value")
     shell("settings put global transition_animation_scale $value")
     shell("settings put global window_animation_scale $value")
@@ -337,10 +375,42 @@ class SettingsPresetWorkflowTest {
     composeRule.waitForIdle()
   }
 
+  private fun appContext(): Context = InstrumentationRegistry.getInstrumentation().targetContext
+
+  /** Kept so a run that stops early still puts the device's animation scales back. */
+  private var animationScalesToRestore: Map<String, String>? = null
+
+  private fun animationScales(): Map<String, String> =
+    listOf("animator_duration_scale", "transition_animation_scale", "window_animation_scale")
+      .associateWith { shell("settings get global $it").trim() }
+
+  private fun restoreAnimationScales() {
+    animationScalesToRestore?.forEach { (key, value) -> shell("settings put global $key $value") }
+    animationScalesToRestore = null
+    Thread.sleep(200)
+  }
+
+  /**
+   * The system back gesture: a swipe in from the left edge. Its coordinates come from the display,
+   * so it is the same gesture on any screen.
+   */
   private fun backFromLeftEdge() {
-    shell("input swipe 2 1200 1000 1200 400")
+    val (width, height) = displaySize()
+    shell("input swipe 2 ${height / 2} ${width - 80} ${height / 2} 400")
     composeRule.waitForIdle()
     Thread.sleep(500)
+  }
+
+  private fun displaySize(): Pair<Int, Int> {
+    val physical =
+      shell("wm size")
+        .lines()
+        .firstOrNull { it.contains("Physical size") }
+        ?.substringAfter("Physical size:")
+        ?.split("x")
+        ?.mapNotNull { it.trim().toIntOrNull() }
+    val (width, height) = (physical ?: listOf(1080, 2400))
+    return width to height
   }
 
   // ------------------------------------------------------------- settings --
@@ -391,12 +461,18 @@ class SettingsPresetWorkflowTest {
 
   private fun tapPreset(name: String) = tapInEditor(name)
 
-  /** Saved rows only: a chip in the editor is not an item in the fridge. */
-  private fun savedItems(): Int =
-    composeRule
-      .onAllNodes(hasText("Remove from fridge"), useUnmergedTree = true)
-      .fetchSemanticsNodes()
-      .size
+  /**
+   * The rows the fridge has actually stored, read from its own database. The editor's delete
+   * button shares its label with nothing on a list, so it cannot stand in for a saved row.
+   */
+  private fun savedItemNames(): List<String> {
+    val path = appContext().getDatabasePath("yumgo_fridge.db").path
+    return SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+      db
+        .rawQuery("SELECT name FROM fridge_item WHERE deleted_at IS NULL", null)
+        .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+    }
+  }
 
   private fun assertDraftName(expected: String) {
     eventually { composeRule.onNode(hasSetTextAction() and hasText(expected, substring = true)).assertIsDisplayed() }

@@ -14,6 +14,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -23,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
@@ -36,7 +38,9 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
@@ -45,6 +49,7 @@ import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import com.dwk.yumgo.data.FoodPreset
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -76,6 +81,8 @@ class FridgeContentWorkflowTest {
   private var frameWidthDp by mutableIntStateOf(0)
   /** 1 is the device font scale; 2 stands in for the 200% text setting. */
   private var frameFontScale by mutableFloatStateOf(1f)
+  /** Swapped by a test that needs the editor laid out inside the frame rather than in its own window. */
+  private var screen: (@Composable () -> Unit)? by mutableStateOf(null)
 
   private val callbacks =
     FridgeCallbacks(
@@ -114,23 +121,25 @@ class FridgeContentWorkflowTest {
       automation.serviceInfo.apply { flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS }
     rule.setContent {
       val base = LocalDensity.current
+      val fridge: @Composable () -> Unit = {
+        FridgeContent(
+          state = state,
+          callbacks = callbacks,
+          snackbarHost = { SnackbarHost(snackbar) },
+          cameraContent = {
+            BackHandler { state = state.copy(cameraOpen = false) }
+            Text(CAMERA_SLOT)
+          },
+        )
+      }
       CompositionLocalProvider(LocalDensity provides Density(base.density, frameFontScale)) {
         Box(
           Modifier
             .fillMaxSize()
+            .testTag(FrameTag)
             .then(if (frameWidthDp > 0) Modifier.width(frameWidthDp.dp) else Modifier),
         ) {
-          YumgoTheme {
-            FridgeContent(
-              state = state,
-              callbacks = callbacks,
-              snackbarHost = { SnackbarHost(snackbar) },
-              cameraContent = {
-                BackHandler { state = state.copy(cameraOpen = false) }
-                Text(CAMERA_SLOT)
-              },
-            )
-          }
+          YumgoTheme { (screen ?: fridge)() }
         }
       }
     }
@@ -308,33 +317,42 @@ class FridgeContentWorkflowTest {
 
   /**
    * A 320dp window at 200% text: the expiry label, its date, and both actions have to stack and
-   * stay readable, Save has to stay reachable, and the stepper stays usable at that text size.
+   * stay readable, and Save has to stay reachable and inside the window.
+   *
+   * The editor is shown the way it is after a camera trip, when it is laid out inside the window
+   * rather than in a sheet of its own, so the 320dp frame is the width the editor is really given.
    */
   @Test
-  fun narrowWindowAtLargeText_keepsExpiryActionsAndSaveUsable() {
+  fun narrowWindowAtLargeText_keepsEditorExpiryAndSaveUsable() {
     val today = LocalDate.now().toEpochDay()
     frameWidthDp = 320
     frameFontScale = 2f
-    state =
-      state.copy(
-        items = listOf(FridgeItemUi("milk", "Whole Milk", 2, today + 1, null)),
-        draft = ItemDraft(null, "Yoghurt", 2, today + 3, null, presetId = "yogurt"),
+    val draft = ItemDraft(null, "Yoghurt", 2, today + 3, null, presetId = "yogurt")
+    // The saved callback reads the screen's own draft, so both see the same one.
+    state = state.copy(draft = draft)
+    screen = {
+      ItemEditor(
+        draft = draft,
+        callbacks = callbacks,
+        presets = listOf(FoodPreset("yogurt", "Yoghurt", 10)),
+        restored = true,
       )
+    }
     rule.waitForIdle()
 
     // The editor's expiry block reads top to bottom, with nothing overlapping.
     rule.onNodeWithText("Expiry").assertIsDisplayed()
     rule.onNodeWithText("In 3 days").assertIsDisplayed()
-    val date = rule.onNodeWithText("In 3 days").screenBounds()
+    val date = rule.onNodeWithText("In 3 days", useUnmergedTree = true).screenBounds()
     val choose = rule.onNodeWithText("Choose expiry date").assertIsDisplayed().screenBounds()
     val clear = rule.onNodeWithText("Clear expiry date").assertIsDisplayed().screenBounds()
     assertTrue("The choose action overlaps the date at $date and $choose", choose.top >= date.bottom)
     assertTrue("The clear action overlaps the date at $date and $clear", clear.top >= date.bottom)
-    assertTrue("The expiry actions run off the 320dp window: $choose and $clear", clear.right <= screenWidth())
+    assertTrue("The expiry actions run off the 320dp window: $choose and $clear", clear.right <= frameRight())
 
     // Save is still there, still inside the window, and still works.
     val save = rule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().screenBounds()
-    assertTrue("Save runs off the 320dp window: $save", save.right <= screenWidth())
+    assertTrue("Save runs off the 320dp window: $save", save.right <= frameRight())
     rule.onNodeWithText("Save").performClick()
     rule.waitForIdle()
     assertTrue(events.toString(), "save:Yoghurt" in events)
@@ -393,11 +411,34 @@ class FridgeContentWorkflowTest {
         .screenBounds()
     assertTrue("The date ran into the name: $name and $date", date.top >= name.bottom)
     assertTrue("The stepper sat on the text: $date and $plus", plus.top >= date.bottom)
-    assertTrue("The card runs off the 320dp window: $plus", plus.right <= screenWidth())
+    assertTrue("The card runs off the 320dp window: $plus", plus.right <= frameRight())
     rule.onNodeWithText("No expiry").assertIsDisplayed()
   }
 
-  private fun screenWidth(): Float = rule.activity.window.decorView.width.toFloat()
+  /**
+   * The frame is 320dp wide here, so that is the edge the layout has to stay inside. The full
+   * window is wider, and checking against it would pass whatever the frame does.
+   */
+  private fun frameRight(): Float = with(rule.density) { rule.onNodeWithTag(FrameTag).getUnclippedBoundsInRoot().right.toPx() }
+
+  /**
+   * Save is reachable by a finger while the keyboard is up: a real touch is sent where the button
+   * is drawn, not a semantic click, so a button hidden behind the keyboard cannot pass.
+   */
+  @Test
+  fun saveIsReachableByARealTouchWithTheKeyboardUp() {
+    state = state.copy(draft = ItemDraft(null, "Real Touch", 1, null, null))
+    rule.waitForIdle()
+    rule.onNode(hasSetTextAction() and hasText("Name")).performClick()
+    val imeTop = awaitImeTop()
+    val save = rule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().screenBounds()
+    assertTrue("Save bottom ${save.bottom} is under the keyboard top $imeTop", save.bottom <= imeTop)
+    val x = (save.left + save.right) / 2f
+    val y = (save.top + save.bottom) / 2f
+    shell("input tap ${x.toInt()} ${y.toInt()}")
+    rule.waitUntil(5_000) { events.contains("save:Real Touch") }
+    assertTrue(events.toString(), "save:Real Touch" in events)
+  }
 
   private fun scrollListToEnd() {
     var guard = 0
@@ -456,7 +497,14 @@ class FridgeContentWorkflowTest {
     output.close()
   }
 
+  /** Shell output, for the one check that has to be a real finger rather than a click action. */
+  private fun shell(command: String): String {
+    val process = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+    return FileInputStream(process.fileDescriptor).use { it.readBytes().decodeToString() }.also { process.close() }
+  }
+
   private companion object {
     const val CAMERA_SLOT = "Camera slot"
+    const val FrameTag = "t5-frame"
   }
 }
