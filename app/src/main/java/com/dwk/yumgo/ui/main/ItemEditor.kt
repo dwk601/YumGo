@@ -314,12 +314,22 @@ private fun EditorBody(
   var nameValue by rememberSaveable(draft.id, stateSaver = NameValueSaver) {
     mutableStateOf(TextFieldValue(draft.name, selection = TextRange(draft.name.length)))
   }
+  // Names the field has sent that the draft has not shown back yet. The draft reaches the editor
+  // through a flow, a frame or more behind the keyboard, so a draft still showing an earlier
+  // keystroke is the field's own past rather than a change from elsewhere: taking it would throw
+  // away the letters typed since, which fast typing on a cold start did.
+  val unechoed = remember(draft.id) { ArrayDeque<String>() }
   LaunchedEffect(draft.name) {
-    if (nameValue.text != draft.name) {
+    val echoed = unechoed.indexOf(draft.name)
+    if (echoed >= 0) {
+      repeat(echoed + 1) { unechoed.removeFirst() }
+    } else if (nameValue.text != draft.name) {
+      unechoed.clear()
       nameValue = TextFieldValue(draft.name, selection = TextRange(draft.name.length))
     }
   }
   val onNameTyped: (TextFieldValue) -> Unit = { typed ->
+    if (typed.text != nameValue.text) unechoed.addLast(typed.text)
     nameValue = typed
     callbacks.onDraftChange(draft.copy(name = typed.text, errorMessage = null))
   }
@@ -613,9 +623,8 @@ private fun PresetLane(
   modifier: Modifier = Modifier,
 ) {
   val name = typed.trim()
-  val completions = presets.filter { it.completes(name) }
-  val named = presets.any { it.name.equals(name, ignoreCase = true) }
-  val narrowed = completions.isNotEmpty() && !named
+  val completions = presets.completing(name)
+  val narrowed = completions.isNotEmpty()
   val shown = if (narrowed) completions else presets
   // A tap fills the name while the field is empty, while the lane is narrowed to chips that would
   // finish what is being typed, and while the name is a preset's own and another preset may replace

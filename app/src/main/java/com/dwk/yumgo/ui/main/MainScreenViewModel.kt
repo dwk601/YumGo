@@ -126,7 +126,8 @@ class MainScreenViewModel(
     // Fill each field only while the user has not decided it: a name they typed and a date they
     // picked are theirs, and a tap must not take either back.
     val typed = current.name.trim()
-    val keepName = typed.isNotEmpty() && !current.nameFromPreset && !preset.completes(typed)
+    val keepName =
+      typed.isNotEmpty() && !current.nameFromPreset && presets.value.completing(typed).none { it.id == preset.id }
     val keepDate = current.expiryEpochDay != null && current.presetEpochDay != current.expiryEpochDay
     draft.value =
       current.copy(

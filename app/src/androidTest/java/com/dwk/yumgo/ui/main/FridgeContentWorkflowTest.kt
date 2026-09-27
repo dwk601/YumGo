@@ -126,7 +126,7 @@ class FridgeContentWorkflowTest {
         if (draft != null) {
           val today = LocalDate.now().toEpochDay()
           val typed = draft.name.trim()
-          val keepName = typed.isNotEmpty() && !preset.completes(typed)
+          val keepName = typed.isNotEmpty() && presets.completing(typed).none { it.id == preset.id }
           state =
             state.copy(
               draft =

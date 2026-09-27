@@ -32,6 +32,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.io.FileInputStream
+import com.dwk.yumgo.data.FoodPreset
+import com.dwk.yumgo.data.SettingsServices
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -54,7 +57,9 @@ import org.junit.runners.model.Statement
 class FridgeWorkflowTest {
   private val composeRule = createAndroidComposeRule<MainActivity>()
 
-  @get:Rule val rule: TestRule = RuleChain.outerRule(WipeFridgeRule()).around(composeRule)
+  // The shortcuts these workflows tap are the bundled ones, whatever an earlier run left in Settings.
+  @get:Rule
+  val rule: TestRule = RuleChain.outerRule(WipeFridgeRule()).around(CleanSettingsRule()).around(composeRule)
 
   @Before
   fun watchIme() {
@@ -282,6 +287,51 @@ class FridgeWorkflowTest {
     composeRule.onNodeWithText("Save").performClick()
     composeRule.waitUntil(15_000) { nodeCount("Milk") > 0 }
     composeRule.onNodeWithText("Milk").assertIsDisplayed()
+  }
+
+  /**
+   * A shortcut renamed in Settings can start with another one's whole name. A name the user typed
+   * whole is still theirs then: the line says a tap only sets the date, and the tap on the longer
+   * shortcut keeps that promise instead of finishing a name that was already finished.
+   */
+  @Test
+  fun shortcut_leavesAWholeNameAloneEvenWhenAnotherShortcutStartsWithIt() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    runBlocking { SettingsServices.presets(context).update(FoodPreset("eggs", "Milk oat", 5)).getOrThrow() }
+    addButton().performClick()
+    composeRule.waitUntil(15_000) { nodeCount("Premade items") > 0 }
+    val name = composeRule.onNode(hasSetTextAction() and hasText("Name", substring = true))
+
+    name.performTextInput("Milk")
+    composeRule.waitUntil(10_000) { nodeCount("One tap sets the date.") > 0 }
+    composeRule.onNodeWithText("Milk oat").performClick()
+    composeRule.waitUntil(10_000) { nodeCount("In 5 days") > 0 }
+    val spoken = name.spoken()
+    assertTrue("The shortcut replaced a name the user typed whole: $spoken", "Milk" in spoken)
+    assertTrue("The shortcut replaced a name the user typed whole: $spoken", "Milk oat" !in spoken)
+  }
+
+  /**
+   * Letters typed as fast as a keyboard sends them all arrive, starting from a sheet that has only
+   * just opened. The name reaches the draft a frame or so behind the field, and a field that took
+   * that late copy back as a change would drop the letters typed in between.
+   */
+  @Test
+  fun fastTyping_keepsEveryLetter() {
+    val word = "chocolatemilkshakes"
+    repeat(3) { round ->
+      addButton().performClick()
+      composeRule.waitUntil(15_000) { nodeCount("Premade items") > 0 }
+      val name = composeRule.onNode(hasSetTextAction() and hasText("Name", substring = true))
+      composeRule.waitUntil(10_000) { name.fetchSemanticsNode().config.getOrElse(SemanticsProperties.Focused) { false } }
+      shell("input text $word")
+      // Every key has been sent once the shell returns; give the draft a moment to catch up.
+      Thread.sleep(1_000)
+      composeRule.waitForIdle()
+      assertTrue("Round $round lost letters: ${name.spoken()}", word in name.spoken())
+      composeRule.onNodeWithText("Save").performClick()
+      composeRule.waitUntil(15_000) { nodeCount("Add to the fridge") == 0 }
+    }
   }
 
   /**

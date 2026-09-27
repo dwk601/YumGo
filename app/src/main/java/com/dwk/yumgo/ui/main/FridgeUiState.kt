@@ -55,6 +55,18 @@ data class FridgeItemUi(
 fun FoodPreset.completes(typed: String): Boolean =
   typed.isNotEmpty() && name.length > typed.length && name.startsWith(typed, ignoreCase = true)
 
+/**
+ * The shortcuts a tap would finish [typed] with, which is what the lane narrows to and the one case
+ * where a tap replaces a name the user typed. None while [typed] is already a shortcut's whole name,
+ * even when another shortcut's name starts with it (a preset renamed in Settings can do that): the
+ * lane then says a tap only sets the date, and the tap has to keep that promise.
+ */
+fun List<FoodPreset>.completing(typed: String): List<FoodPreset> {
+  val name = typed.trim()
+  if (any { it.name.equals(name, ignoreCase = true) }) return emptyList()
+  return filter { it.completes(name) }
+}
+
 /** Controlled editor fields. Photo changes go through [FridgeCallbacks], not a copied draft. */
 data class ItemDraft(
   val id: String?,
