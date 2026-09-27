@@ -21,6 +21,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -424,6 +425,11 @@ private fun SectionHeader(group: ExpiryGroup, modifier: Modifier = Modifier) {
   }
 }
 
+/**
+ * One item. The thumbnail, name, and expiry sit on the first line, and the stepper drops below
+ * them when the card is too narrow or the text is too large to keep them beside each other, so
+ * the name and the date stay readable instead of being squeezed to a few characters.
+ */
 @Composable
 private fun FridgeCard(item: FridgeItemUi, callbacks: FridgeCallbacks, modifier: Modifier = Modifier) {
   val editLabel = stringResource(R.string.fridge_edit_item)
@@ -433,28 +439,50 @@ private fun FridgeCard(item: FridgeItemUi, callbacks: FridgeCallbacks, modifier:
     shape = MaterialTheme.shapes.large,
     color = MaterialTheme.colorScheme.surfaceContainerLowest,
   ) {
-    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-      FridgeThumbnail(name = item.name, photoReference = item.photoReference)
-      Column(Modifier.weight(1f).padding(start = 12.dp, end = 8.dp)) {
-        Text(
-          text = item.name,
-          style = MaterialTheme.typography.titleMedium,
-          maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-          text = fridgeExpiryLabel(item.expiryEpochDay),
-          style = MaterialTheme.typography.bodySmall,
-          color = fridgeExpiryColor(item.expiryEpochDay),
-          modifier = Modifier.padding(top = 2.dp),
+    BoxWithConstraints(Modifier.padding(12.dp)) {
+      val stacked = maxWidth < SideBySideMinWidth || LocalDensity.current.fontScale > LargeTextScale
+      val stepper = @Composable { extra: Modifier ->
+        QuantityStepper(
+          quantity = item.quantity,
+          name = item.name,
+          onQuantityChange = { callbacks.onQuantityChange(item.id, it) },
+          modifier = extra,
         )
       }
-      QuantityStepper(
-        quantity = item.quantity,
-        name = item.name,
-        onQuantityChange = { callbacks.onQuantityChange(item.id, it) },
-      )
+      if (stacked) {
+        Column(Modifier.fillMaxWidth()) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            FridgeThumbnail(name = item.name, photoReference = item.photoReference)
+            CardText(item = item, modifier = Modifier.weight(1f).padding(start = 12.dp))
+          }
+          stepper(Modifier.padding(top = 10.dp, start = 4.dp))
+        }
+      } else {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          FridgeThumbnail(name = item.name, photoReference = item.photoReference)
+          CardText(item = item, modifier = Modifier.weight(1f).padding(start = 12.dp, end = 8.dp))
+          stepper(Modifier)
+        }
+      }
     }
+  }
+}
+
+@Composable
+private fun CardText(item: FridgeItemUi, modifier: Modifier = Modifier) {
+  Column(modifier) {
+    Text(
+      text = item.name,
+      style = MaterialTheme.typography.titleMedium,
+      maxLines = 2,
+      overflow = TextOverflow.Ellipsis,
+    )
+    Text(
+      text = fridgeExpiryLabel(item.expiryEpochDay),
+      style = MaterialTheme.typography.bodySmall,
+      color = fridgeExpiryColor(item.expiryEpochDay),
+      modifier = Modifier.padding(top = 2.dp),
+    )
   }
 }
 
@@ -635,6 +663,15 @@ private fun monogram(name: String): String =
   name.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "·"
 
 private const val MaxQuantity = 99
+
+/**
+ * Narrowest card that still holds the thumbnail, a readable name, and the stepper side by side.
+ * Below it the stepper moves under the text instead of squeezing it.
+ */
+private val SideBySideMinWidth = 290.dp
+
+/** Font scale above which the text needs the full card width to itself. */
+private const val LargeTextScale = 1.3f
 
 internal val FridgePlus: ImageVector by lazy { fridgeIcon("Plus") { plus() } }
 internal val FridgeMinus: ImageVector by lazy { fridgeIcon("Minus") { minus() } }

@@ -50,19 +50,30 @@ fun MainNavigation() {
         )
       }
     },
-    transitionSpec = { panTowards(back = targetState.key == Settings, spatial = spatial, effects = effects) },
-    popTransitionSpec = { panTowards(back = targetState.key == Main, spatial = spatial, effects = effects) },
+    transitionSpec = { pushIn(spatial = spatial, effects = effects) },
+    popTransitionSpec = { pushOut(spatial = spatial, effects = effects) },
   )
 }
 
-/** Push slides in from the end, pop slides back from the start. */
-private fun AnimatedContentTransitionScope<*>.panTowards(
-  back: Boolean,
+/**
+ * A push slides the new scene in from the end. NavDisplay picks this spec for a forward
+ * transition and [pushOut] for the pop, so the direction does not depend on reading a scene key.
+ */
+private fun AnimatedContentTransitionScope<*>.pushIn(
   spatial: FiniteAnimationSpec<IntOffset>,
   effects: FiniteAnimationSpec<Float>,
 ): ContentTransform {
-  val direction = if (back) SlideDirection.Right else SlideDirection.Left
-  val enter = slideIntoContainer(direction, animationSpec = spatial) + fadeIn(effects)
-  val exit = slideOutOfContainer(direction, animationSpec = spatial) + fadeOut(effects)
+  val enter = slideIntoContainer(SlideDirection.Left, animationSpec = spatial) + fadeIn(effects)
+  val exit = slideOutOfContainer(SlideDirection.Left, animationSpec = spatial) + fadeOut(effects)
+  return enter togetherWith exit
+}
+
+/** The way back: the previous scene returns from the start. */
+private fun AnimatedContentTransitionScope<*>.pushOut(
+  spatial: FiniteAnimationSpec<IntOffset>,
+  effects: FiniteAnimationSpec<Float>,
+): ContentTransform {
+  val enter = slideIntoContainer(SlideDirection.Right, animationSpec = spatial) + fadeIn(effects)
+  val exit = slideOutOfContainer(SlideDirection.Right, animationSpec = spatial) + fadeOut(effects)
   return enter togetherWith exit
 }

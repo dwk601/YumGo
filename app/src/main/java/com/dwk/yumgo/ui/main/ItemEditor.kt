@@ -69,6 +69,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.platform.LocalView
 import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
@@ -77,6 +78,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
@@ -87,6 +90,8 @@ import com.dwk.yumgo.data.FoodPreset
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import kotlin.math.roundToInt
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * In-place add/edit sheet. The name field takes focus. Save stays pinned above
@@ -188,6 +193,9 @@ private fun EditorBody(
   val sheetReady =
     sheetState != null && sheetState.currentValue == SheetValue.Expanded && !sheetState.isAnimationRunning
   val scroll = rememberScrollState()
+  val scrollSpec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
+  var viewportBottom by remember { mutableStateOf(0f) }
+  var messageBottom by remember { mutableStateOf(0f) }
   var pickingDate by rememberSaveable { mutableStateOf(false) }
   var didAutofocus by remember(draft.id) { mutableStateOf(false) }
   val canSave = draft.name.isNotBlank() && !draft.saving
@@ -198,6 +206,25 @@ private fun EditorBody(
       didAutofocus = true
     }
   }
+  // A photo problem is the last thing telling the user they can still type, and the keyboard can
+  // leave the photo section below the fold, so the editor scrolls it into view. The scroll
+  // container is a plain verticalScroll, which drops bring-into-view requests, so the scroll is
+  // driven here and the sheet is given a moment to finish measuring first.
+  LaunchedEffect(draft.photoMessage, windowFocused) {
+    if (draft.photoMessage.isNullOrBlank() || !windowFocused) return@LaunchedEffect
+    var previous = -1
+    var settled = 0
+    withTimeoutOrNull(RevealWaitMillis) {
+      while (settled < SettledFrames) {
+        withFrameNanos {}
+        val range = scroll.maxValue
+        settled = if (range == previous && range > 0) settled + 1 else 0
+        previous = range
+      }
+    }
+    val target = (scroll.value + (messageBottom - viewportBottom)).roundToInt().coerceIn(0, scroll.maxValue)
+    scroll.animateScrollTo(target, scrollSpec)
+  }
 
   BoxWithConstraints(Modifier.fillMaxWidth()) {
     Column(Modifier.fillMaxWidth().heightIn(max = maxHeight)) {
@@ -205,7 +232,8 @@ private fun EditorBody(
         Modifier
           .weight(1f, fill = false)
           .verticalScroll(scroll)
-          .padding(horizontal = 20.dp),
+          .padding(horizontal = 20.dp)
+          .onGloballyPositioned { viewportBottom = it.boundsInWindow().bottom },
       ) {
         Text(
           text = stringResource(if (draft.id == null) R.string.editor_add_title else R.string.editor_edit_title),
@@ -229,7 +257,9 @@ private fun EditorBody(
           keyboardActions = KeyboardActions(onDone = { if (canSave) callbacks.onSave() }),
         )
         Spacer(Modifier.height(8.dp))
-        if (draft.id == null && presets.isNotEmpty()) {
+        // The shortcuts are the fast path for the first choice. Once the name is the user's own
+        // they get out of the way, which also keeps the photo section reachable above the keyboard.
+        if (draft.id == null && presets.isNotEmpty() && (draft.name.isBlank() || draft.presetId != null)) {
           PresetRow(
             presets = presets,
             selectedId = draft.presetId,
@@ -252,7 +282,7 @@ private fun EditorBody(
           callbacks.onDraftChange(draft.copy(expiryEpochDay = null, errorMessage = null))
         })
         Spacer(Modifier.height(16.dp))
-        PhotoRow(draft = draft, callbacks = callbacks)
+        PhotoRow(draft = draft, callbacks = callbacks, onMessageBounds = { messageBottom = it })
         Spacer(Modifier.height(8.dp))
         if (draft.id != null) {
           TextButton(
@@ -400,11 +430,34 @@ private fun ExpiryRow(draft: ItemDraft, enabled: Boolean, onPick: () -> Unit, on
   }
 }
 
+/**
+ * Photo is optional, so it stays last. A problem message sits directly under the heading, where
+ * the keyboard cannot push it out of reach, and [onMessageBounds] lets the editor scroll to it.
+ */
 @Composable
-private fun PhotoRow(draft: ItemDraft, callbacks: FridgeCallbacks) {
+private fun PhotoRow(draft: ItemDraft, callbacks: FridgeCallbacks, onMessageBounds: (Float) -> Unit) {
   val take = stringResource(R.string.editor_take_photo)
   val pick = stringResource(R.string.editor_pick_photo)
+  val message = draft.photoMessage
   Text(text = stringResource(R.string.editor_photo_label), style = MaterialTheme.typography.labelLarge)
+  if (!message.isNullOrBlank()) {
+    Surface(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .padding(top = 6.dp)
+          .onGloballyPositioned { onMessageBounds(it.boundsInWindow().bottom) },
+      shape = MaterialTheme.shapes.medium,
+      color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+      Text(
+        text = message,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+      )
+    }
+  }
   if (draft.photoReference != null) {
     FridgeThumbnail(
       name = draft.name.ifBlank { stringResource(R.string.editor_photo_label) },
@@ -425,7 +478,7 @@ private fun PhotoRow(draft: ItemDraft, callbacks: FridgeCallbacks) {
       Spacer(Modifier.width(ButtonDefaults.IconSpacing))
       Text(stringResource(R.string.editor_remove_photo), color = MaterialTheme.colorScheme.error)
     }
-  } else {
+  } else if (message.isNullOrBlank()) {
     Text(
       text = stringResource(R.string.editor_photo_empty),
       style = MaterialTheme.typography.bodySmall,
@@ -454,20 +507,6 @@ private fun PhotoRow(draft: ItemDraft, callbacks: FridgeCallbacks) {
       Text(pick)
     }
   }
-  if (!draft.photoMessage.isNullOrBlank()) {
-    Surface(
-      modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-      shape = MaterialTheme.shapes.medium,
-      color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    ) {
-      Text(
-        text = draft.photoMessage,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-      )
-    }
-  }
 }
 
 @Composable
@@ -489,6 +528,12 @@ private fun ExpiryDialog(epochDay: Long?, onConfirm: (Long?) -> Unit, onDismiss:
 
 @Composable
 private fun <T> motionFade(): FiniteAnimationSpec<T> = MaterialTheme.motionScheme.fastEffectsSpec()
+
+/** How long the editor waits for the sheet to be measured before revealing a photo problem. */
+private const val RevealWaitMillis = 1_500L
+
+/** Frames the scroll range must hold still before the editor scrolls to a photo problem. */
+private const val SettledFrames = 3
 
 private fun epochDayToUtcMillis(epochDay: Long): Long =
   LocalDate.ofEpochDay(epochDay).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()

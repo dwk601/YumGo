@@ -113,19 +113,26 @@ class MainScreenViewModel(
 
   /**
    * Fills the new draft from a premade food: its name and today's date plus its suggested days.
-   * Nothing is written to the fridge until Save, and a later edit of the name or the date drops
-   * the link so nothing reapplies the suggestion.
+   * Each field is filled only while the user has not decided it, so a typed name or a chosen date
+   * survives a later tap. Nothing is written to the fridge until Save.
    */
   fun onPresetSelected(preset: FoodPreset) {
     val current = draft.value ?: return
     if (current.id != null || current.saving) return
     val days = preset.expiryDays.coerceIn(0, MaxPresetDays).toLong()
+    val suggested = LocalDate.now().plusDays(days).toEpochDay()
+    // Fill each field only while the user has not decided it: a name they typed and a date they
+    // picked are theirs, and a tap must not take either back.
+    val keepName = current.name.isNotBlank() && !current.nameFromPreset
+    val keepDate = current.expiryEpochDay != null && current.presetEpochDay != current.expiryEpochDay
     draft.value =
       current.copy(
-        name = preset.name,
-        expiryEpochDay = LocalDate.now().plusDays(days).toEpochDay(),
+        name = if (keepName) current.name else preset.name,
+        expiryEpochDay = if (keepDate) current.expiryEpochDay else suggested,
         errorMessage = null,
+        nameFromPreset = !keepName,
         presetId = preset.id,
+        presetEpochDay = suggested,
       )
     persistDraft()
   }
@@ -147,14 +154,20 @@ class MainScreenViewModel(
   fun onDraftChange(updated: ItemDraft) {
     val current = draft.value ?: return
     if (current.saving) return
-    val filledValuesChanged = updated.name != current.name || updated.expiryEpochDay != current.expiryEpochDay
+    val nameChanged = updated.name != current.name
+    val dateChanged = updated.expiryEpochDay != current.expiryEpochDay
+    val nameFromPreset = if (nameChanged) false else current.nameFromPreset
+    val presetEpochDay = if (dateChanged) null else current.presetEpochDay
     draft.value =
       current.copy(
         name = updated.name,
         quantity = updated.quantity.coerceIn(1, 99),
         expiryEpochDay = updated.expiryEpochDay,
         errorMessage = null,
-        presetId = if (filledValuesChanged) null else current.presetId,
+        nameFromPreset = nameFromPreset,
+        // Nothing of the preset is left once the user has taken over both fields.
+        presetId = if (nameFromPreset || presetEpochDay != null) current.presetId else null,
+        presetEpochDay = presetEpochDay,
       )
     persistDraft()
   }
@@ -414,6 +427,8 @@ class MainScreenViewModel(
       savedState.remove<String>(KEY_DRAFT_PHOTO)
       savedState.remove<String>(KEY_DRAFT_PHOTO_MESSAGE)
       savedState.remove<String>(KEY_DRAFT_PRESET)
+      savedState.remove<Long>(KEY_DRAFT_PRESET_DATE)
+      savedState[KEY_DRAFT_PRESET_NAME] = false
       return
     }
     if (current.id == null) savedState.remove<String>(KEY_DRAFT_ID) else savedState[KEY_DRAFT_ID] = current.id
@@ -423,6 +438,8 @@ class MainScreenViewModel(
     savedState[KEY_DRAFT_PHOTO] = current.photoRef
     if (current.photoMessage == null) savedState.remove<String>(KEY_DRAFT_PHOTO_MESSAGE) else savedState[KEY_DRAFT_PHOTO_MESSAGE] = current.photoMessage
     if (current.presetId == null) savedState.remove<String>(KEY_DRAFT_PRESET) else savedState[KEY_DRAFT_PRESET] = current.presetId
+    if (current.presetEpochDay == null) savedState.remove<Long>(KEY_DRAFT_PRESET_DATE) else savedState[KEY_DRAFT_PRESET_DATE] = current.presetEpochDay
+    savedState[KEY_DRAFT_PRESET_NAME] = current.nameFromPreset
   }
 
   private fun readDraft(): Editable? {
@@ -435,6 +452,8 @@ class MainScreenViewModel(
       photoRef = savedState.get<String>(KEY_DRAFT_PHOTO),
       photoMessage = savedState.get<String>(KEY_DRAFT_PHOTO_MESSAGE),
       presetId = savedState.get<String>(KEY_DRAFT_PRESET),
+      presetEpochDay = savedState.get<Long>(KEY_DRAFT_PRESET_DATE),
+      nameFromPreset = savedState[KEY_DRAFT_PRESET_NAME] ?: false,
     )
   }
 
@@ -485,7 +504,8 @@ class MainScreenViewModel(
       saving = saving,
       errorMessage = errorMessage,
       photoMessage = photoMessage,
-      presetId = presetId,
+      // The chip is only lit while something in the draft still came from a preset.
+      presetId = if (nameFromPreset || presetEpochDay != null) presetId else null,
     )
 
   private data class Editable(
@@ -498,6 +518,10 @@ class MainScreenViewModel(
     val errorMessage: String? = null,
     val photoMessage: String? = null,
     val presetId: String? = null,
+    /** Date [presetId] suggested, kept so a name edit does not make a changed date look untouched. */
+    val presetEpochDay: Long? = null,
+    /** True while the draft still carries the preset's own name, so a tap may replace it. */
+    val nameFromPreset: Boolean = false,
   )
 
   private companion object {
@@ -511,6 +535,8 @@ class MainScreenViewModel(
     const val KEY_DRAFT_PHOTO = "draft_photo"
     const val KEY_DRAFT_PHOTO_MESSAGE = "draft_photo_message"
     const val KEY_DRAFT_PRESET = "draft_preset"
+    const val KEY_DRAFT_PRESET_DATE = "draft_preset_date"
+    const val KEY_DRAFT_PRESET_NAME = "draft_preset_name"
     const val KEY_UNDO_ID = "undo_id"
     const val KEY_UNDO_NAME = "undo_name"
   }
