@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -26,10 +27,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -144,6 +148,11 @@ private fun SettingsContent(
   // Watching the room means the last reveal is the one that counts.
   val room = remember { mutableIntStateOf(0) }
   val listState = rememberLazyListState()
+  // The room the list leaves at the bottom: the keyboard and the navigation bar, whichever is
+  // taller, so the list's bottom edge is somewhere a person can see and a finger can reach. The
+  // Scaffold hands out the safe drawing insets, so this is the one place the navigation bar is asked
+  // for again, and it is asked for before those insets are consumed.
+  val bottomRoom = WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)
 
   // Bring the open editor into the room the keyboard leaves. Runs when a field takes focus and
   // whenever that room changes, all after composition, so the requesters are attached before they
@@ -178,19 +187,22 @@ private fun SettingsContent(
   ) { innerPadding ->
     LazyColumn(
       state = listState,
-      // After the Scaffold's padding, so the viewport itself ends at the keyboard and the last
-      // card can rise above it instead of being cut off by the bottom of the screen.
-      //
-      // The top bar's room is padding on the list, not content padding, so the scrollable
-      // viewport starts below the bar. Scrolling a card to the edge of a viewport that reaches up
-      // under the bar parks it behind the bar, which is what a person sees in landscape: the
-      // field they are typing in disappears under the title, and only the one below it shows.
+      // The room the list leaves at the bottom, and its two edges, are padding on the list rather
+      // than content padding, so the scrollable viewport is the room a person can see. At the top
+      // that means below the app bar: scrolling a card to the edge of a viewport that reaches up
+      // under the bar parks it behind the bar, which is what a person saw in landscape, where the
+      // field being typed into disappeared under the title. At the bottom it means above the
+      // navigation bar as well as above the keyboard, whichever is taller: the reveal scrolls Save
+      // to the bottom edge of the viewport, and an edge at the bottom of the screen is a Save
+      // button under the navigation bar, which a tap there cannot reach.
       modifier =
         Modifier
           .fillMaxSize()
-          .consumeWindowInsets(innerPadding)
           .padding(top = innerPadding.calculateTopPadding())
-          .imePadding()
+          .windowInsetsPadding(bottomRoom)
+          // Last, because consuming the Scaffold's insets would take the navigation bar away from
+          // the padding above it, and the rest of the room has to stop here anyway.
+          .consumeWindowInsets(innerPadding)
           // In innermost, so it reads the size inside the padding: the room, not the window.
           .onSizeChanged { room.intValue = it.height },
       contentPadding =
@@ -202,7 +214,7 @@ private fun SettingsContent(
           // a card at the end of the list could not be brought up at all: the reveal asked for the
           // scroll and the list said no. The extra room is the card's own height, which is as much
           // as a reveal can ever need, and it goes when the editor closes.
-          bottom = innerPadding.calculateBottomPadding() + 32.dp + editor.openCardHeight.dp,
+          bottom = 32.dp + editor.openCardHeight.dp,
         ),
     ) {
       item(key = "appearance-header", contentType = "header") { SectionTitle(stringResource(R.string.settings_appearance_title)) }
@@ -396,10 +408,12 @@ private fun PresetCard(
 private fun PresetEditFields(edit: PresetEdit, editor: EditorBringIntoView, callbacks: SettingsCallbacks) {
   val saveFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
   // A phone on its side with the keyboard up has room for the field being typed into and the
-  // button that saves it, and not for the hint under the days field as well. The hint explains the
-  // number before it is typed, and it is the first thing to go when keeping it would push Save off
-  // the screen. An error is never dropped: it is the reason the edit did not go through.
+  // button that saves it, and not for the gaps around them and the hint under the days field as
+  // well. The hint explains the number before it is typed, and the gaps are only spacing, so both
+  // are the first things to go when keeping them would push Save off the screen. An error is never
+  // dropped: it is the reason the edit did not go through.
   val shortWindow = LocalConfiguration.current.screenHeightDp <= ShortWindowHeightDp
+  val gap = if (shortWindow) 0.dp else 8.dp
   Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
     OutlinedTextField(
       value = edit.name,
@@ -426,7 +440,7 @@ private fun PresetEditFields(edit: PresetEdit, editor: EditorBringIntoView, call
       value = edit.days,
       onValueChange = callbacks.onPresetDaysChange,
       modifier =
-        Modifier.fillMaxWidth().padding(top = 8.dp).bringIntoViewWhen(editor.requestFor(PresetField.Days))
+        Modifier.fillMaxWidth().padding(top = gap).bringIntoViewWhen(editor.requestFor(PresetField.Days))
           .onFocusChanged { focus ->
             if (focus.isFocused) editor.focusedField = PresetField.Days
           },
@@ -454,7 +468,7 @@ private fun PresetEditFields(edit: PresetEdit, editor: EditorBringIntoView, call
       )
     }
     Row(
-      modifier = Modifier.fillMaxWidth().padding(top = 8.dp).bringIntoViewRequester(editor.actions),
+      modifier = Modifier.fillMaxWidth().padding(top = gap).bringIntoViewRequester(editor.actions),
       horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
       verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -641,7 +655,7 @@ private suspend fun awaitFrames(frames: Int = 3) {
 
 /**
  * The compact-height boundary, the same 480dp the Material window size classes use. Below it the
- * window is a phone on its side, where the editor leaves out its hint to keep Save on the screen.
+ * window is a phone on its side, where the editor tightens itself to keep Save on the screen.
  */
 private const val ShortWindowHeightDp = 480
 
