@@ -324,10 +324,14 @@ class FridgeWorkflowTest {
         fieldBounds.height,
         HalfPixel,
       )
-      // And it starts below the top of what the screen is showing, not behind the status bar.
+      // And it starts below the sheet's own header, which in a short window is the row that
+      // carries the title. A field can be inside the window and still be under the sheet's
+      // chrome, which no keyboard check can see.
+      val header = composeRule.onAllNodes(hasText(EditorTitle)).fetchSemanticsNodes().firstOrNull()
+      assertNotNull("The sheet's header is missing, so the top of the sheet is unknown", header)
       assertTrue(
-        "The name field runs off the top of the screen: $fieldBounds",
-        fieldBounds.top >= 0f,
+        "The name field starts above the sheet's header: field $fieldBounds, header ${header!!.boundsInRoot}",
+        fieldBounds.top >= header.boundsInRoot.bottom,
       )
       // Finally, the text the user typed has to be painted where the field says it is, rather
       // than hidden behind something drawn over the field.
@@ -418,6 +422,8 @@ class FridgeWorkflowTest {
     const val DarkPixelLimit = 120
     /** Rounding slack, because bounds are measured in pixels and land on halves. */
     const val HalfPixel = 0.5f
+    /** The sheet's own header, which carries the title in a short window. */
+    const val EditorTitle = "Add to the fridge"
   }
 
   private fun awaitImeTop(): Float {
