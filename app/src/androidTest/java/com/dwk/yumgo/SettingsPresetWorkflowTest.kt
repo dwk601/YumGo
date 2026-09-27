@@ -138,15 +138,19 @@ class SettingsPresetWorkflowTest {
   }
 
   /**
-   * A shortcut never takes back something the user decided. A name of their own gets the chips out
-   * of the way, a date they picked by hand survives a later chip, and both survive Save.
+   * A shortcut never takes back something the user decided. Typing a name of their own leaves the
+   * premade row where it was rather than making it jump under the finger, and what they typed is
+   * still there afterwards; a date they picked by hand survives a later chip, and both survive Save.
    */
   @Test
   fun presetTap_neverTakesBackANameOrDateTheUserChose() {
     addButton().performClick()
     composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("My Own Milk")
     composeRule.waitForIdle()
-    composeRule.onNodeWithText("Premade items").assertDoesNotExist()
+    // The row stays on screen while a name of their own is being typed, and what they typed is
+    // still the name in the field: a chip under the finger cannot take it back.
+    composeRule.onNodeWithText("Premade items").assertIsDisplayed()
+    assertDraftName("My Own Milk")
 
     // Start again: a chip fills the name and a suggested date.
     composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextReplacement("")
