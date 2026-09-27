@@ -196,19 +196,19 @@ class WidgetWorkflowTest {
     val wide = startColumn().childCount + endColumn().childCount
     assertTrue("A wide card should fit more than the small one did, $wide against $small", wide > small)
     assertEverythingAccountedFor(6)
-    withCardLaidOutAt(110) { assertNothingClipped(110) }
+    withCardLaidOutAt(430, 110) { assertNothingClipped(110) }
 
     // The same width, with room for the whole list: all of it, over two even columns.
     resize(430, 180)
     awaitWidget { rows().size == 6 && twoEvenColumns() }
     assertEquals("A 430x180 card holds all six, so nothing is hidden", "", moreText())
-    withCardLaidOutAt(180) { assertNothingClipped(180) }
+    withCardLaidOutAt(430, 180) { assertNothingClipped(180) }
 
     // And one narrow column, as tall as the card may be, still shows all of them.
     resize(250, 360)
     awaitWidget { rows().size == 6 && endColumn().visibility == View.GONE }
     assertEquals("A 250x360 card holds all six, so nothing is hidden", "", moreText())
-    withCardLaidOutAt(360) { assertNothingClipped(360) }
+    withCardLaidOutAt(250, 360) { assertNothingClipped(360) }
   }
 
   /**
@@ -311,7 +311,7 @@ class WidgetWorkflowTest {
     awaitWidget { endColumn().visibility == View.GONE && rows().isNotEmpty() }
     val small = rows().size
     assertTrue("A 250x110 card should not fit many rows, got $small", small in 1..3)
-    captureCard("t5-widget-small", 110)
+    captureCard("t5-widget-small", 250, 110)
 
     // Wide: two even columns, and twice the rows of the same height in one. The system rounds the
     // option it hands back, so this clears the card's own 380dp threshold instead of sitting on it,
@@ -321,13 +321,13 @@ class WidgetWorkflowTest {
     val wide = startColumn().childCount + endColumn().childCount
     assertTrue("The wide card should hold more rows than the small one, $wide against $small", wide > small)
     assertEverythingAccountedFor(6)
-    captureCard("t5-widget-wide", 180)
+    captureCard("t5-widget-wide", 400, 180)
 
     // Tall: one column, and the whole list, because the room is there.
     resize(250, 260)
     awaitWidget { singleColumnOf(6) }
     assertEquals("A 250x260 card holds all six, so nothing is hidden", "", moreText())
-    captureCard("t5-widget-tall", 260)
+    captureCard("t5-widget-tall", 250, 260)
 
     // The same card on a dark device with the app in its dark theme: still the light palette.
     setDeviceNightMode(true)
@@ -335,7 +335,7 @@ class WidgetWorkflowTest {
       runBlocking { SettingsServices.preferences(context()).setThemeMode(ThemeMode.Dark) }
       add("Dark Device Plums", days = 4)
       awaitWidget { singleColumnOf(7) }
-      captureCard("t5-widget-dark", 260)
+      captureCard("t5-widget-dark", 250, 260)
       assertEquals("A dark device turned the card dark", 0xFFF7F6F2.toInt(), cardColour())
     } finally {
       runBlocking { SettingsServices.preferences(context()).setThemeMode(ThemeMode.Light) }
@@ -344,11 +344,13 @@ class WidgetWorkflowTest {
   }
 
   /**
-   * A widget at the size a launcher gives a 3x2 placement, with a few things in the fridge.
+   * A widget at the size a launcher gives its default placement, with a few things in the fridge.
    *
    * The card used to work its row count out of the smallest height a launcher might use, so at the
    * default size it drew one row and pushed the rest behind "+1 more" with space to spare. All
-   * three have to be on the card here, because that is the placement every user starts from.
+   * three have to be on the card here, because that is the placement every user starts from, and the
+   * box is the one the Pixel launcher of this device was measured giving, not a guess: 360x224dp,
+   * which is one column.
    */
   @Test
   fun placedWidget_atTheDefaultThreeByTwoSize_showsEveryItem() {
@@ -363,8 +365,8 @@ class WidgetWorkflowTest {
     awaitWidget { moreText().isNotEmpty() }
     assertTrue("Three items fit in a 250x110 card, so the rest of this proves nothing", rows().size < 3)
 
-    // What the system hands a host for a 3x2 placement: a small minimum it may shrink to, the
-    // size it is actually given in portrait, and the per-size list a launcher sends from API 31.
+    // What the system hands a host for the launcher's default 4x2 placement: the box the Pixel
+    // launcher measured in each orientation, and the per-size list a launcher sends from API 31.
     setLauncherDefaultSize()
     awaitWidget(20_000) { visibleNames().size >= 3 }
 
@@ -375,6 +377,15 @@ class WidgetWorkflowTest {
     assertTrue("Sourdough is missing from the default card: $names", names.any { it.startsWith("Sourdough") })
     // Nothing is left hiding behind the overflow line while there is room on the card.
     assertEquals("Nothing should be left in the overflow at this size", "", moreText())
+    // The default card is 360dp wide, which is one column, and it has to be drawn as one.
+    assertEquals("The launcher's default card is one column", View.GONE, endColumn().visibility)
+    assertEquals(
+      "The default card is one column, so every row is in it",
+      3,
+      startColumn().childCount,
+    )
+    // A frame of the card at exactly the launcher's default box, for a person to look at.
+    captureCard("t5-widget-default", LauncherDefaultWidthDp, LauncherDefaultHeightDp)
   }
 
   private fun singleColumnOf(rows: Int): Boolean =
@@ -390,23 +401,24 @@ class WidgetWorkflowTest {
    * Attaches the rendered card to the activity, photographs it, and puts the app back. The card is
    * given the screen to lay out in, because a view nothing hosts measures itself to nothing.
    */
-  private fun captureCard(tag: String, heightDp: Int) =
-    withCardLaidOutAt(heightDp) {
+  private fun captureCard(tag: String, widthDp: Int, heightDp: Int) =
+    withCardLaidOutAt(widthDp, heightDp) {
       assertNothingClipped(heightDp)
       Thread.sleep(500)
       shell("screencap -p /data/local/tmp/$tag.png")
     }
 
   /**
-   * Lays the card out in a box of this height on the real screen, runs [block], and takes the card
+   * Lays the card out in a box of this size on the real screen, runs [block], and takes the card
    * off again. A card that no window hosts measures itself to nothing, so this is the only way to
-   * read back what the host would really draw at a size.
+   * read back what the host would really draw at a size, and laying it out in the very box the host
+   * was told about is what makes it pick that box's card.
    */
-  private fun withCardLaidOutAt(heightDp: Int, block: () -> Unit) {
+  private fun withCardLaidOutAt(widthDp: Int, heightDp: Int, block: () -> Unit) {
     val context = context()
     val card = requireNotNull(widget)
+    val holder = FrameLayout(context)
     composeRule.runOnUiThread {
-      val holder = FrameLayout(context)
       holder.addView(
         card,
         FrameLayout.LayoutParams(
@@ -416,14 +428,22 @@ class WidgetWorkflowTest {
       )
       composeRule.activity.addContentView(
         holder,
-        ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(context, heightDp)),
+        ViewGroup.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,
+          dp(context, heightDp),
+        ).apply { width = dp(context, widthDp) },
       )
     }
     composeRule.waitForIdle()
     try {
       block()
     } finally {
-      composeRule.runOnUiThread { (card.parent as? ViewGroup)?.removeView(card) }
+      // The holder goes too: left in the content view it would push the app's own rows down for
+      // every later tap the test makes.
+      composeRule.runOnUiThread {
+        (card.parent as? ViewGroup)?.removeView(card)
+        (holder.parent as? ViewGroup)?.removeView(holder)
+      }
       composeRule.waitForIdle()
     }
   }
@@ -707,48 +727,65 @@ class WidgetWorkflowTest {
   /**
    * Puts the placed instance in a box of this size, the way a launcher does.
    *
-   * A launcher reports three things, and the card needs all of them: the smallest box it might
-   * shrink the widget to, the largest it might grow it to, and, from API 31, the size it is
-   * actually drawing for each orientation. Sending only the minimum, as this harness used to, is
-   * not a box any launcher sends, and a card that reads the list a real launcher sends had nothing
-   * to budget from: it fell back to a size built out of a maximum the harness never set.
+   * A launcher reports the box for *both* orientations at once, and from API 31 the list of the
+   * sizes it is drawing. Before API 31 the platform reads the four options as two boxes: the
+   * portrait placement is the minimum width with the maximum height, and the landscape one is the
+   * maximum width with the minimum height. Sending only one of the four, as this harness used to,
+   * is a box no launcher sends, and a card that reads the list a real launcher sends had nothing to
+   * budget from: it fell back to a size built out of a number that was never set.
    *
    * Every option is in dp, which is what the platform documents and what the launcher on this
-   * device sends. The smallest height is the one a landscape placement would be given, so a card
-   * that budgets from the minimum again shows one row over a mostly empty card.
+   * device sends. The landscape box defaults to the full width of the screen at the same height,
+   * which is what a placement spanning the screen does when the home screen turns.
    *
    * Reporting the box is only half of it. A host picks the card for the size the widget is actually
-   * laid out in, so the card is put in a window of that height as well: a card that is never laid
+   * laid out in, so the card is put in a window of that size as well: a card that is never laid
    * out is a card no host would ever choose, and the row count under test would be the one left
    * over from the size before.
    */
-  private fun resize(widthDp: Int, heightDp: Int) {
+  private fun resize(
+    widthDp: Int,
+    heightDp: Int,
+    landscapeWidthDp: Int = screenWidthDp(),
+    landscapeHeightDp: Int = heightDp,
+  ) {
     val context = context()
     val options =
       Bundle().apply {
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, minOf(widthDp, ShrinkWidthDp))
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, minOf(heightDp, ShrinkHeightDp))
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, widthDp)
+        // The platform reads these as two boxes: the portrait placement and the landscape one.
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, widthDp)
         putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, heightDp)
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, landscapeWidthDp)
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, landscapeHeightDp)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           // The sizes the launcher is drawing, one per orientation, in dp.
           putParcelableArrayList(
             AppWidgetManager.OPTION_APPWIDGET_SIZES,
-            arrayListOf(SizeF(widthDp.toFloat(), heightDp.toFloat())),
+            arrayListOf(
+              SizeF(widthDp.toFloat(), heightDp.toFloat()),
+              SizeF(landscapeWidthDp.toFloat(), landscapeHeightDp.toFloat()),
+            ),
           )
         }
       }
     composeRule.runOnUiThread {
       AppWidgetManager.getInstance(context).updateAppWidgetOptions(widgetId, options)
     }
-    withCardLaidOutAt(heightDp) {}
+    withCardLaidOutAt(widthDp, heightDp) {}
   }
 
   /**
-   * The size a launcher gives a 3x2 placement: the full width of the screen, and the height the
-   * integration review measured on the Pixel launcher.
+   * The box the Pixel launcher gives the default 4x2 placement on this emulator, in both
+   * orientations, measured on the device rather than worked out from the provider's own defaults.
+   * A 360dp card is one column, which is the whole point of using the real numbers.
    */
-  private fun setLauncherDefaultSize() = resize(screenWidthDp(), LauncherDefaultHeightDp)
+  private fun setLauncherDefaultSize() =
+    resize(
+      widthDp = LauncherDefaultWidthDp,
+      heightDp = LauncherDefaultHeightDp,
+      landscapeWidthDp = LauncherDefaultLandscapeWidthDp,
+      landscapeHeightDp = LauncherDefaultLandscapeHeightDp,
+    )
 
   /** The width of the screen in dp, which is what a full-width placement is given. */
   private fun screenWidthDp(): Int {
@@ -761,7 +798,8 @@ class WidgetWorkflowTest {
         ?.firstOrNull()
         ?.trim()
         ?.toIntOrNull()
-    return (reported ?: 1080) / density().toInt()
+    // The density is 2.625 on this screen: truncating it to an Int would report 540dp, not 411.
+    return ((reported ?: 1080) / density()).toInt()
   }
 
   private fun density(): Float = context().resources.displayMetrics.density
@@ -804,12 +842,16 @@ class WidgetWorkflowTest {
     const val CardProbeWidth = 420
     const val CardProbeHeight = 240
     const val TwoDaysSeconds = 2 * 24 * 60 * 60L
-    /** What the Pixel launcher hands a 3x2 placement on this screen. */
-    const val LauncherDefaultHeightDp = 234
-    /** The provider's smallest width, which is the narrower a launcher shrinks the card. */
-    const val ShrinkWidthDp = 180
-    /** The height a landscape placement of this card would be given. */
-    const val ShrinkHeightDp = 150
+    /**
+     * The default 4x2 placement on the Pixel launcher of emulator-5554, measured on the device:
+     * 360x224dp on a portrait home screen and 627x210dp on a landscape one. These are the numbers
+     * the review checked the card against, so a harness that reports anything else is testing a
+     * box no launcher on this device produces.
+     */
+    const val LauncherDefaultWidthDp = 360
+    const val LauncherDefaultHeightDp = 224
+    const val LauncherDefaultLandscapeWidthDp = 627
+    const val LauncherDefaultLandscapeHeightDp = 210
     /** Rounding slack, in px, for a row that ends right on the edge of its area. */
     const val ClipTolerancePx = 2
   }

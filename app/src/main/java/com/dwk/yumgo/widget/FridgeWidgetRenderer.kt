@@ -102,8 +102,10 @@ internal object FridgeWidgetRenderer {
    * the closest size to the box it lays the widget out in, and re-picks it whenever the widget is
    * resized or re-laid out.
    *
-   * Before API 31 there is no list to map, so the single card falls back to the platform's min/max
-   * options. [legacySize] reads those without asking the app which way round it is.
+   * Before API 31 there is no list to map, but the platform reads a landscape and a portrait card
+   * against the *host's* own configuration, which is the launcher's: the app can be rotated the
+   * other way and must not be the one that says which card to draw. Both cards come from the
+   * launcher's own numbers.
    */
   private fun cardFor(
     context: Context,
@@ -118,7 +120,10 @@ internal object FridgeWidgetRenderer {
         }
       if (bySize.isNotEmpty()) return RemoteViews(bySize)
     }
-    return cardViews(context, legacySize(options), snapshot, openFridge)
+    return RemoteViews(
+      cardViews(context, legacySize(options, portrait = false), snapshot, openFridge),
+      cardViews(context, legacySize(options, portrait = true), snapshot, openFridge),
+    )
   }
 
   private fun cardViews(
@@ -284,30 +289,31 @@ internal object FridgeWidgetRenderer {
       RootPaddingDp
 
   /**
-   * The size to build for when the host reports no list of configurations, that is before API 31.
+   * The box the card is in, in dp, on a host that reports no list of configurations, that is before
+   * API 31.
    *
-   * Every number here is the launcher's own, in dp. The platform reports the smallest and the
-   * largest box it will give this instance, for the orientation the home screen is in, and the two
-   * largest are bounded by the launcher's own screen: whichever of them is the taller side says
-   * which way round the home screen is. The app's configuration cannot say it, because the app can
-   * be in landscape while the home screen stays in portrait, and the card is drawn by the launcher
-   * in the launcher's configuration, not in the app's.
+   * A launcher there reports the box for *both* orientations at once, rather than one box for the
+   * configuration it is in: [AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH] with
+   * [AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT] is the portrait placement, and
+   * [AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH] with [AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT]
+   * is the landscape one. Which of the two the home screen is in is the host's business, decided
+   * against the launcher's own configuration by [RemoteViews]' landscape and portrait pair, so the
+   * card is built for both and the app's own rotation is not asked at all.
    *
-   * A placement grows along the screen's short axis, which is what pairs the narrow width with the
-   * tall height in portrait and the wide one with the short height in landscape. A host that
-   * reports no maximum at all has said nothing about its orientation, so the card is built for the
-   * smallest box it did report: the one size every box it may be given can hold without clipping.
+   * A host that reports one side of a pair, or neither, has said nothing about that box, and the
+   * card falls back to its default row count for it.
    */
-  private fun legacySize(options: Bundle): WidgetSize? {
-    val minWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
-    val maxWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 0)
-    val minHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0)
-    val maxHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
-    if (minWidth <= 0 || minHeight <= 0) return null
-    if (maxWidth <= 0 || maxHeight <= 0) return WidgetSize(minWidth.toFloat(), minHeight.toFloat())
-    val portrait = maxWidth <= maxHeight
-    val width = if (portrait) minWidth else maxWidth
-    val height = if (portrait) maxHeight else minHeight
+  private fun legacySize(options: Bundle, portrait: Boolean): WidgetSize? {
+    val width =
+      options.getInt(
+        if (portrait) AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH else AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH,
+        0,
+      )
+    val height =
+      options.getInt(
+        if (portrait) AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT else AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,
+        0,
+      )
     if (width <= 0 || height <= 0) return null
     return WidgetSize(widthDp = width.toFloat(), heightDp = height.toFloat())
   }
