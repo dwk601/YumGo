@@ -14,10 +14,10 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -25,6 +25,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.io.FileInputStream
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.FixMethodOrder
@@ -213,8 +215,7 @@ class FridgeWorkflowTest {
     composeRule.waitUntil(15_000) { nodeCount("Rotate Eggs") > 0 && nodeCount("Add to the fridge") > 0 }
     // Save stays usable, and the draft is still the one being typed.
     composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled()
-    val name = composeRule.onNode(hasSetTextAction() and hasText("Rotate Eggs", substring = true))
-    name.performScrollTo().assertIsDisplayed()
+    composeRule.onNode(hasSetTextAction() and hasText("Rotate Eggs", substring = true)).assertExists()
     composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().performClick()
     composeRule.waitUntil(15_000) { nodeCount("Rotate Eggs") > 0 }
     composeRule.onNodeWithText("Rotate Eggs").assertIsDisplayed()
@@ -239,8 +240,7 @@ class FridgeWorkflowTest {
       composeRule.waitUntil(20_000) { nodeCount("Turned Eggs") > 0 && orientation() == ORIENTATION_LANDSCAPE }
       assertEquals("The app did not follow the display", ORIENTATION_LANDSCAPE, orientation())
       composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled()
-      val name = composeRule.onNode(hasSetTextAction() and hasText("Turned Eggs", substring = true))
-      name.performScrollTo().assertIsDisplayed()
+      composeRule.onNode(hasSetTextAction() and hasText("Turned Eggs", substring = true)).assertExists()
       composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().performClick()
       composeRule.waitUntil(20_000) { nodeCount("Turned Eggs") > 0 }
 
@@ -261,6 +261,82 @@ class FridgeWorkflowTest {
         System.identityHashCode(settled),
         System.identityHashCode(composeRule.activity),
       )
+    } finally {
+      deviceSetting("system", "user_rotation", rotation)
+      deviceSetting("system", "accelerometer_rotation", autoRotate)
+    }
+  }
+
+  /**
+   * Landscape with the keyboard up, which is the shape that used to leave only the sheet's handle
+   * and Save on screen. The field being typed into keeps focus and its text, the keyboard stays,
+   * what was typed sits above the keyboard, and a finger can reach Save.
+   */
+  @Test
+  fun landscapeWithTheKeyboard_keepsTheFieldTypedIntoAndSaveReachable() {
+    val autoRotate = deviceSetting("system", "accelerometer_rotation")
+    val rotation = deviceSetting("system", "user_rotation")
+    try {
+      deviceSetting("system", "accelerometer_rotation", "0")
+      addButton().performClick()
+      composeRule.waitUntil(15_000) { nodeCount("Add to the fridge") > 0 }
+      // Put the keyboard away first, so it is the turn below and then the typing that have to
+      // cope with a short window. A keyboard that was already up would hide the problem.
+      shell("input keyevent 4")
+      composeRule.waitUntil(10_000) { imeTopOrNull() == null }
+      composeRule.onNodeWithText("Add to the fridge").assertIsDisplayed()
+
+      rotateDisplay(1)
+      composeRule.waitUntil(20_000) { orientation() == ORIENTATION_LANDSCAPE && nodeCount("Add to the fridge") > 0 }
+      val name = composeRule.onNode(hasSetTextAction() and hasText("Name"))
+
+      // Typing is what raises the keyboard in this shape, and the field has to survive it.
+      name.performClick()
+      val imeTop = awaitImeTop()
+      composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Keyboard Eggs")
+      composeRule.waitUntil(10_000) { nodeCount("Keyboard Eggs") > 0 }
+      assertTrue(
+        "The name field lost focus when the display turned",
+        composeRule
+          .onAllNodes(hasSetTextAction() and hasText("Name") and isFocused())
+          .fetchSemanticsNodes()
+          .isNotEmpty(),
+      )
+      // The keyboard is still there: typing only works while it is.
+      assertNotNull("The keyboard closed itself in landscape", imeTopOrNull())
+
+      // What was typed, and the button that saves it, are both above the keyboard.
+      val field =
+        composeRule
+          .onNode(hasSetTextAction() and hasText("Keyboard Eggs", substring = true))
+          .assertIsDisplayed()
+          .fetchSemanticsNode()
+      val fieldBottom = field.positionOnScreen.y + field.size.height
+      assertTrue("The text is behind the keyboard at $fieldBottom against $imeTop", fieldBottom <= imeTop)
+      // And nothing is drawn over it. A compact layout that puts the field in the row beside Save
+      // leaves the sheet's own handle sitting on top of what the user is typing, which a keyboard
+      // check alone cannot see.
+      val handle = composeRule.onAllNodes(hasContentDescription("Drag handle")).fetchSemanticsNodes().firstOrNull()
+      if (handle != null) {
+        assertFalse(
+          "The sheet's handle is drawn over the name field: ${field.boundsInRoot} under ${handle.boundsInRoot}",
+          field.boundsInRoot.overlaps(handle.boundsInRoot),
+        )
+      }
+      val save = composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().fetchSemanticsNode()
+      val saveBottom = save.positionOnScreen.y + save.size.height
+      assertTrue("Save is behind the keyboard at $saveBottom against $imeTop", saveBottom <= imeTop)
+
+      // And a finger can press it, which is the whole point of the compact layout.
+      shell(
+        "input tap ${(save.positionOnScreen.x + save.size.width / 2).toInt()} ${(save.positionOnScreen.y + save.size.height / 2).toInt()}",
+      )
+      composeRule.waitUntil(20_000) { nodeCount("Add to the fridge") == 0 && nodeCount("Keyboard Eggs") > 0 }
+      composeRule.onNodeWithText("Keyboard Eggs").assertIsDisplayed()
+
+      rotateDisplay(0)
+      composeRule.waitUntil(20_000) { orientation() == ORIENTATION_PORTRAIT }
+      composeRule.onNodeWithText("Keyboard Eggs").assertIsDisplayed()
     } finally {
       deviceSetting("system", "user_rotation", rotation)
       deviceSetting("system", "accelerometer_rotation", autoRotate)
@@ -304,6 +380,9 @@ class FridgeWorkflowTest {
     composeRule.waitUntil(10_000) { imeTop(automation) != null }
     return imeTop(automation)!!
   }
+
+  private fun imeTopOrNull(): Float? =
+    imeTop(InstrumentationRegistry.getInstrumentation().uiAutomation)
 
   private fun imeTop(automation: android.app.UiAutomation): Float? {
     val window =
