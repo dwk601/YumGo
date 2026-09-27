@@ -1,5 +1,8 @@
 package com.dwk.yumgo.ui.common
 
+import android.graphics.drawable.ColorDrawable
+import android.os.Build
+import android.view.Window
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -13,41 +16,57 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogWindowProvider
 import com.dwk.yumgo.theme.DarkColorScheme
 import com.dwk.yumgo.theme.LightColorScheme
 
 /**
- * The surface under the platform's navigation buttons, for every window that has to carry one.
+ * The surface under the platform's navigation buttons, for every window that can end up behind the
+ * bar: the activity's, and the add sheet's, which is a window of its own.
  *
- * With the gesture handle the platform draws a pill and takes its colour from the window, so the
+ * With the gesture handle the platform draws a pill and takes its colour from this window, so the
  * bar is left to the app's own paper. The buttons are drawn by the platform instead, and it takes
  * their colour from the *device*: on API 35 a light app on a dark device got pale buttons (#C5C6D0)
  * on its own light paper at 1.6:1, and a dark app on a light device got dark ones (#44464F) on its
- * dark paper at 2.0:1. The app cannot change those icons. The window appearance reaches SystemUI
- * and is ignored there, the activity's own uiMode never reaches it at all, and
- * `window.navigationBarColor` is a no-op for an app targeting API 35. The bar is the one thing
- * left, so it takes the polarity the device's buttons need, in a tone of the app's own palette: the
- * `surfaceContainer` of the palette the app is not painting with. Both tones clear 7:1 against the
- * buttons, and a slab of pure black or white would not sit with the paper.
+ * dark paper at 2.0:1. The app cannot change those icons. The window appearance reaches SystemUI and
+ * is ignored there, the activity's own uiMode never reaches it at all, and `window.navigationBarColor`
+ * is a no-op for an app targeting API 35. The bar is the one thing left, so it takes the polarity the
+ * device's buttons need, in a tone of the app's own palette: the `surfaceContainer` of the palette
+ * the app is not painting with. Both tones clear 7:1 against the buttons, where a slab of pure
+ * black or white would not sit with the paper.
  *
  * Two cases get nothing, because the app's own paper already carries the buttons: a bar no taller
  * than the gesture handle, which is how the two are told apart, and a palette that already matches
  * the device. A band there would only show as a seam.
  *
- * The bar is read from the insets of the window this is composed in, so a phone turned sideways, and
- * a device switching between the handle and the buttons while the app is open, bring it back. Add
- * it in a `Box` that fills that window, above the content: it covers what scrolls under a bar, as a
- * system bar would, and takes no touches of its own.
+ * The band goes on the edge of the box it is composed in, which has to reach the screen's edge on
+ * the bar's side for that to be where the buttons are. The activity's box does, and the add sheet's
+ * is given the bar's room back by its caller, so its box does too; turned sideways the sheet is
+ * narrower than the screen and [reachesTheScreenEdge] says no, because the activity's band is
+ * already where the buttons are and a second one would only stripe the sheet.
+ *
+ * The bar is read from the insets of the window this is composed in, so a phone turned sideways,
+ * and a device switching between the handle and the buttons while the app is open, bring it back.
+ *
+ * Add it in a `Box` above the content: it covers what scrolls under a bar, as a system bar would,
+ * and takes no touches of its own.
+ *
+ * @param reachesTheScreenEdge whether the content reaches the screen's edge on the bar's side.
  */
 @Composable
-fun BoxScope.NavigationBarBand() {
+fun BoxScope.NavigationBarBand(reachesTheScreenEdge: Boolean = true) {
   val deviceDark = isSystemInDarkTheme()
   if (MaterialTheme.colorScheme.surface.isDark() == deviceDark) return
   val insets = WindowInsets.navigationBars.asPaddingValues()
@@ -55,7 +74,39 @@ fun BoxScope.NavigationBarBand() {
   val left = insets.calculateLeftPadding(direction)
   val right = insets.calculateRightPadding(direction)
   val bottom = insets.calculateBottomPadding()
-  if (maxOf(bottom, right, left) < ButtonNavigationBarHeight) return
+  val bar = maxOf(bottom, right, left)
+  if (bar < ButtonNavigationBarHeight) return
+  val colour = if (deviceDark) DarkColorScheme.surfaceContainer else LightColorScheme.surfaceContainer
+  val view = LocalView.current
+  val window = (view.parent as? DialogWindowProvider)?.window
+
+  // The platform lays a veil of white over the bar of any window that asks for its contrast scrim,
+  // and a veil of that colour leaves the buttons short of contrast whatever the app paints under
+  // them. The activity's window has had its scrim off since edge to edge; a dialog's window, which
+  // the add sheet is, has not. Before API 29 there is no scrim to turn off, and the platform takes
+  // the button colour from the window's own appearance there.
+  val veil = remember(window) { if (window != null) ScrimlessBar(window) else null }
+  if (!reachesTheScreenEdge) {
+    // A window's own content does not always reach the bar, and what shows in the gap is that
+    // window's background: the add sheet's content stops at the bar, and Material fills the gap with
+    // the sheet's colour, so the gap takes the band's colour instead. Set after every composition,
+    // because the window is given its own background after this is first composed, and only when it
+    // is not already this one, so a composition cannot start a loop of them.
+    val behindTheBar = remember(window, colour) { ColorDrawable(colour.toArgb()) }
+    SideEffect {
+      if (window != null) {
+        if (window.decorView.background !== behindTheBar) window.setBackgroundDrawable(behindTheBar)
+        veil?.apply()
+      }
+    }
+    DisposableEffect(window) { onDispose { veil?.restore() } }
+    return
+  }
+  DisposableEffect(window) {
+    onDispose { veil?.restore() }
+  }
+  SideEffect { veil?.apply() }
+
   // The insets are absolute, so the band follows the edge they name rather than the edge the layout
   // reads: the bar keeps its own side however the phone is turned.
   val ltr = direction == LayoutDirection.Ltr
@@ -65,10 +116,7 @@ fun BoxScope.NavigationBarBand() {
       right >= left -> Modifier.align(if (ltr) Alignment.CenterEnd else Alignment.CenterStart).fillMaxHeight().width(right)
       else -> Modifier.align(if (ltr) Alignment.CenterStart else Alignment.CenterEnd).fillMaxHeight().width(left)
     }
-  Box(
-    modifier =
-      band.background(if (deviceDark) DarkColorScheme.surfaceContainer else LightColorScheme.surfaceContainer),
-  )
+  Box(modifier = band.background(colour))
 }
 
 /**
@@ -76,6 +124,39 @@ fun BoxScope.NavigationBarBand() {
  * read as buttons, which is the same call the platform makes for the 2-button layout.
  */
 private val ButtonNavigationBarHeight = 36.dp
+
+/**
+ * One window's navigation bar contrast scrim, off, and whatever it was put back to on the way out.
+ * A window sets its own scrim when it is laid out, so [apply] is safe to call again after that.
+ */
+/**
+ * One window's navigation bar contrast scrim, off, and whatever it was put back to on the way out.
+ * A window sets its own scrim when it is laid out, so [apply] is safe to call again after that. There
+ * is no scrim to turn off before API 29, where the platform takes the button colour from the
+ * window's own appearance.
+ */
+private class ScrimlessBar(private val window: Window?) {
+  private val enforced: Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && window?.isNavigationBarContrastEnforced == true) {
+      window.isNavigationBarContrastEnforced = false
+      true
+    } else {
+      false
+    }
+
+  fun apply() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && window?.isNavigationBarContrastEnforced == true) {
+      window.isNavigationBarContrastEnforced = false
+    }
+  }
+
+  fun restore() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && enforced && window?.isNavigationBarContrastEnforced == false) {
+      window.isNavigationBarContrastEnforced = true
+    }
+  }
+}
+
 
 /** Whether a colour reads as dark, by the relative luminance the contrast rules use. */
 private fun Color.isDark(): Boolean = luminance() < 0.5f

@@ -9,6 +9,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -66,10 +67,15 @@ class NavBarWorkflowTest {
     )
     previousOverlay = enabledNavOverlay()
     autoRotation = navBarShell("settings get system accelerometer_rotation").trim()
+    // Each test starts from an upright device showing the buttons, so it does not matter what the
+    // test before it left behind.
+    navBarShell("settings put system accelerometer_rotation 0")
+    navBarShell("settings put system user_rotation 0")
     enableOverlay(THREE_BUTTON)
-    // The buttons are what these tests measure, and the first palette is the app's own default.
+    eventually("The buttons never appeared") {
+      if (enabledNavOverlay() == THREE_BUTTON) null else "the navigation is ${enabledNavOverlay()}"
+    }
     runBlocking { SettingsServices.preferences(appContext()).setThemeMode(ThemeMode.Light) }
-    composeRule.waitForIdle()
   }
 
   @After
@@ -152,6 +158,7 @@ class NavBarWorkflowTest {
     setDeviceNightMode(true)
     openTheAddSheetWithoutTheKeyboard()
     assertButtonsAreReadable("the add sheet, a light app on a dark device")
+    closeTheAddSheet()
   }
 
   /**
@@ -172,6 +179,8 @@ class NavBarWorkflowTest {
   /** The sheet as a person leaves it: opened, with the keyboard put away again. */
   private fun openTheAddSheetWithoutTheKeyboard() {
     eventually("The add sheet never opened") {
+      // The semantics action, not a tap: the add sheet moves insets around, and a real tap waits
+      // for the app to settle, which it does not do while the sheet is opening.
       runCatching { composeRule.onNodeWithContentDescription("Add").performSemanticsAction(SemanticsActions.OnClick) }
       if (composeRule.onAllNodesWithText("Add to the fridge").fetchSemanticsNodes().isEmpty()) {
         "The add sheet never opened"
@@ -199,6 +208,18 @@ class NavBarWorkflowTest {
     return up
   }
 
+  /** Puts the sheet away, so the test that follows starts on the fridge. */
+  private fun closeTheAddSheet() {
+    navBarShell("input keyevent 4")
+    eventually("The sheet never closed") {
+      if (composeRule.onAllNodesWithText("Add to the fridge").fetchSemanticsNodes().isEmpty()) {
+        null
+      } else {
+        "The sheet is still open"
+      }
+    }
+  }
+
   /**
    * The settings button is the only way into the palette. It has to be clear of the band, and a
    * tap on it has to open the settings, which is the whole promise of the button.
@@ -219,16 +240,17 @@ class NavBarWorkflowTest {
     }
     settings.performClick()
     eventually("$what: tapping Settings never opened the settings") {
-      if (composeRule.onAllNodesWithText("Premade items").fetchSemanticsNodes().isEmpty()) {
+      if (composeRule.onAllNodesWithText(SettingsTitle).fetchSemanticsNodes().isEmpty()) {
         "$what: tapping Settings did not open the settings"
       } else {
         null
       }
     }
-    // A palette row has to be reachable too, or the palette is behind the band as well.
+    // A palette row has to be reachable too, or the palette is behind the band as well. The first
+    // one, which is the one a landscape window always has room for.
     eventually("$what: the theme rows are under the band") {
       val bounds =
-        runCatching { composeRule.onNode(hasClickAction() and hasText("Dark", substring = true)).fetchSemanticsNode().boundsInRoot }
+        runCatching { composeRule.onNode(hasClickAction() and hasText("Light", substring = true)).fetchSemanticsNode().boundsInRoot }
           .getOrNull()
           ?: return@eventually "$what: there are no theme rows on the settings screen"
       val bar = barInRoot()
@@ -422,10 +444,12 @@ class NavBarWorkflowTest {
 
   private fun setDeviceNightMode(night: Boolean?) {
     navBarShell("cmd uimode night ${if (night == null) "auto" else if (night) "yes" else "no"}")
-    // The configuration change takes a moment to reach the app.
+    // The configuration change takes a moment to reach the app. The insets that come with it keep
+    // the app busy for a while afterwards, and idleness is not what this is waiting for, so a
+    // composition that is still settling is left to settle.
     repeat(20) {
       Thread.sleep(250)
-      composeRule.waitForIdle()
+      runCatching { composeRule.waitForIdle() }
     }
   }
 
@@ -440,7 +464,8 @@ class NavBarWorkflowTest {
   private fun enableOverlay(overlay: String) {
     navBarShell("cmd overlay enable-exclusive $overlay")
     Thread.sleep(2_000)
-    composeRule.waitForIdle()
+    // Switching the navigation animates the bar's insets, and the app is busy while they move.
+    runCatching { composeRule.waitForIdle() }
   }
 
   /**
@@ -571,6 +596,9 @@ class NavBarWorkflowTest {
     /** The navigation the device offers, switched through its own system overlay. */
     const val THREE_BUTTON = "com.android.internal.systemui.navbar.threebutton"
     const val GESTURE = "com.android.internal.systemui.navbar.gestural"
+
+    /** The settings screen's own title, which is on screen wherever its list is scrolled. */
+    const val SettingsTitle = "Settings"
 
     /** The least contrast a control has to reach, from WCAG 2.2's non-text guidance. */
     const val MINIMUM_CONTRAST = 3.0
