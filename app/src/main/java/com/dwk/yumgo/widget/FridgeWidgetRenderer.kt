@@ -4,11 +4,14 @@ import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.os.Bundle
 import android.text.TextPaint
+import android.util.SizeF
 import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
+import androidx.core.os.BundleCompat
 import com.dwk.yumgo.MainActivity
 import com.dwk.yumgo.R
 
@@ -28,17 +31,33 @@ internal enum class FridgeWidgetTone(val background: Int, val text: Int) {
  * the widget lists the same items, in the same order, as the fridge screen.
  */
 internal object FridgeWidgetRenderer {
-  private const val MaxRows = 4
+  private const val MaxRows = 5
   private const val DefaultRows = 3
   private const val TwoColumnMinWidthDp = 380f
-
-  /** Chrome above and below the rows: header, divider, root padding, and the "more" line. */
-  private const val HeaderDp = 20f
+  private const val IconDp = 18f
   private const val DividerDp = 17f
-  private const val FooterReserveDp = 18f
   private const val RootPaddingDp = 20f
+  private const val FooterMarginDp = 4f
   private const val RowPaddingDp = 6f
   private const val RowTextSp = 13f
+  private const val TitleSp = 13f
+  private const val FooterTextSp = 11f
+
+  /**
+   * Chrome above and below the rows, in dp: the header, the rule under it, the "more" line, and the
+   * card's own padding. The header and the "more" line hold text, so their heights are measured
+   * rather than guessed: at a large font scale a fixed guess lets one row too many through and the
+   * launcher clips the last one.
+   */
+  private fun chromeDp(context: Context): Float =
+    maxOf(IconDp, textHeightDp(context, TitleSp)) +
+      DividerDp +
+      textHeightDp(context, FooterTextSp) +
+      FooterMarginDp +
+      RootPaddingDp
+
+  /** The box the card is on screen at, in dp. */
+  private data class WidgetSize(val widthDp: Float, val heightDp: Float)
 
   suspend fun render(context: Context, manager: AppWidgetManager, ids: IntArray) {
     val snapshot = FridgeWidgetData.snapshot(context)
@@ -88,8 +107,9 @@ internal object FridgeWidgetRenderer {
     options: Bundle,
     snapshot: FridgeWidgetSnapshot.Items,
   ) {
-    val twoColumns = isTwoColumns(context, options)
-    val rowBudget = rowBudget(context, options, twoColumns)
+    val size = currentSize(context, options)
+    val twoColumns = isTwoColumns(size)
+    val rowBudget = rowBudget(context, size, twoColumns)
     val rows = snapshot.rows.take(rowBudget)
     val hidden = snapshot.rows.size - rows.size
 
@@ -131,40 +151,77 @@ internal object FridgeWidgetRenderer {
     return views
   }
 
-  private fun isTwoColumns(context: Context, options: Bundle): Boolean {
-    val minWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
-    if (minWidth <= 0) return false
-    return minWidth >= dp(context, TwoColumnMinWidthDp)
-  }
+  private fun isTwoColumns(size: WidgetSize?): Boolean =
+    size != null && size.widthDp >= TwoColumnMinWidthDp
 
   /**
-   * Rows that fit the placed height. Row height is measured from the text itself so a large font
-   * scale shows fewer rows instead of clipping the last one.
+   * Rows that fit the height the card is on screen at. Row height is measured from the text itself
+   * so a large font scale shows fewer rows instead of clipping the last one.
    */
-  private fun rowBudget(context: Context, options: Bundle, twoColumns: Boolean): Int {
-    val minHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0)
-    if (minHeight <= 0) return DefaultRows
-    val rowHeight = textHeightPx(context, RowTextSp) + dp(context, RowPaddingDp)
-    val chrome =
-      dp(context, HeaderDp) +
-        dp(context, DividerDp) +
-        dp(context, FooterReserveDp) +
-        dp(context, RootPaddingDp)
-    val fitting = ((minHeight - chrome) / rowHeight).toInt().coerceAtLeast(1)
+  private fun rowBudget(context: Context, size: WidgetSize?, twoColumns: Boolean): Int {
+    val heightDp = size?.heightDp ?: return DefaultRows
+    val fitting = ((heightDp - chromeDp(context)) / rowHeightDp(context)).toInt().coerceAtLeast(1)
     if (!twoColumns) return fitting.coerceAtMost(MaxRows)
     // Two equal columns: never show a half-filled second column.
     return (fitting - fitting % 2).coerceIn(2, MaxRows)
   }
 
-  private fun textHeightPx(context: Context, sizeSp: Float): Float {
-    val paint = TextPaint()
-    paint.textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sizeSp, context.resources.displayMetrics)
-    val metrics = paint.fontMetrics
-    return metrics.descent - metrics.ascent
+  /**
+   * The size the card is on screen at, in dp, or null when the host reports none.
+   *
+   * The min and max options bracket the smallest and largest box the launcher may hand the widget,
+   * so budgeting from the minimum leaves most of a normally sized card empty. API 31 and newer
+   * report the size of each configuration the widget can take instead, as a list of [SizeF] in dp;
+   * the one in use is the tall entry in portrait and the wide entry in landscape, whatever order
+   * the host listed them in. Before that, the minimum is the portrait size and the maximum is the
+   * landscape one. Every option here is in dp, not pixels.
+   */
+  private fun currentSize(context: Context, options: Bundle): WidgetSize? {
+    val portrait = isPortrait(context)
+    val reported = reportedSizes(options)
+    val inUse = reported.maxByOrNull { if (portrait) it.height else it.width }
+    if (inUse != null) return WidgetSize(widthDp = inUse.width, heightDp = inUse.height)
+
+    val width =
+      options.getInt(
+        if (portrait) AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH else AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH,
+        0,
+      )
+    val height =
+      options.getInt(
+        if (portrait) AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT else AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT,
+        0,
+      )
+    if (width <= 0 || height <= 0) return null
+    return WidgetSize(widthDp = width.toFloat(), heightDp = height.toFloat())
   }
 
-  private fun dp(context: Context, value: Float): Float =
-    TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics)
+  private fun reportedSizes(options: Bundle): List<SizeF> =
+    runCatching {
+      BundleCompat.getParcelableArrayList(options, AppWidgetManager.OPTION_APPWIDGET_SIZES, SizeF::class.java)
+        ?.filterIsInstance<SizeF>()
+        .orEmpty()
+    }.getOrDefault(emptyList())
+
+  /** True for portrait and for the square-ish shapes a watch or an unfolded foldable reports. */
+  private fun isPortrait(context: Context): Boolean {
+    when (context.resources.configuration.orientation) {
+      Configuration.ORIENTATION_PORTRAIT -> return true
+      Configuration.ORIENTATION_LANDSCAPE -> return false
+    }
+    val metrics = context.resources.displayMetrics
+    return metrics.heightPixels >= metrics.widthPixels
+  }
+
+  private fun rowHeightDp(context: Context): Float = textHeightDp(context, RowTextSp) + RowPaddingDp
+
+  private fun textHeightDp(context: Context, sizeSp: Float): Float {
+    val metrics = context.resources.displayMetrics
+    val paint = TextPaint()
+    paint.textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sizeSp, metrics)
+    val fontMetrics = paint.fontMetrics
+    return (fontMetrics.descent - fontMetrics.ascent) / metrics.density
+  }
 
   /**
    * Explicit and immutable, so no other app can retarget the tap.
