@@ -424,6 +424,53 @@ class SettingsPresetWorkflowTest {
   }
 
   /**
+   * The settings bar in landscape, in the two shapes a phone is actually held in: the gesture bar
+   * with the display turned one way, and three buttons with it turned the other, where the bar's
+   * controls sit along the left-hand edge. The way back has to be a control a finger can reach
+   * wherever the system bars are, so the check is the size of the control, that it is inside the
+   * safe area, and a real tap that returns to the fridge.
+   */
+  @Test
+  fun settingsBackControlInLandscape_isABigEnoughTargetInsideTheSafeAreaAndGoesBack() {
+    withNavOverlay(GestureOverlay) { backControlReachesTheFridge(turn = 1) }
+    withNavOverlay(ThreeButtonOverlay) { backControlReachesTheFridge(turn = 3) }
+  }
+
+  /** Turns the display [turn] quarter turns round, checks the way back, and turns it back. */
+  private fun backControlReachesTheFridge(turn: Int) {
+    val autoRotate = deviceSetting("system", "accelerometer_rotation")
+    val rotation = deviceSetting("system", "user_rotation")
+    try {
+      deviceSetting("system", "accelerometer_rotation", "0")
+      rotateDisplay(turn)
+      composeRule.waitUntil(20_000) { orientation() == ORIENTATION_LANDSCAPE }
+      openSettingsFromTheFridge()
+
+      val back = composeRule.onNodeWithContentDescription("Back").assertIsDisplayed().fetchSemanticsNode()
+      val bounds = back.boundsInWindow
+      val density = composeRule.activity.resources.displayMetrics.density
+      // A bar in a short window may draw the control at the size the same bar gives in portrait,
+      // but it may not squeeze it: this is that size, and a bar that halves it is the bug.
+      assertTrue(
+        "The way back is ${back.size} at $bounds, squeezed by the bar",
+        back.size.height >= StockControlHeightDp * density,
+      )
+      val safe = safeArea()
+      assertTrue(
+        "The way back at $bounds is outside the safe area $safe",
+        safe.contains(bounds.topLeft) && safe.contains(bounds.bottomRight),
+      )
+      // A finger at the edge of a 48dp target, which is two pixels outside the 40dp the bar draws,
+      // still goes back: that edge is the size a person feels the control is.
+      tapAt(bounds.center.x - (22f * density), bounds.center.y)
+      eventually { composeRule.onNodeWithText("Fridge").assertIsDisplayed() }
+    } finally {
+      deviceSetting("system", "user_rotation", rotation)
+      deviceSetting("system", "accelerometer_rotation", autoRotate)
+    }
+  }
+
+  /**
    * At twice the text size the editor is taller than the room the keyboard leaves, which is where
    * the fields used to end up under it. The field, Save and a finger on Save, all at that size.
    */
@@ -539,9 +586,12 @@ class SettingsPresetWorkflowTest {
 
   /** A real finger on a node, in the place the node is drawn. */
   private fun tapOnScreen(node: SemanticsNode) {
-    val x = (node.positionOnScreen.x + node.size.width / 2f).toInt()
-    val y = (node.positionOnScreen.y + node.size.height / 2f).toInt()
-    shell("input tap $x $y")
+    tapAt(node.positionOnScreen.x + node.size.width / 2f, node.positionOnScreen.y + node.size.height / 2f)
+  }
+
+  /** A real finger at a point on the screen, in window coordinates. */
+  private fun tapAt(x: Float, y: Float) {
+    shell("input tap ${x.toInt()} ${y.toInt()}")
     composeRule.waitForIdle()
   }
 
@@ -653,6 +703,34 @@ class SettingsPresetWorkflowTest {
     var height = 0
     InstrumentationRegistry.getInstrumentation().runOnMainSync { height = composeRule.activity.window.decorView.height }
     return height.toFloat()
+  }
+
+  /**
+   * The part of the window a person can see and touch: the window without the system bars, read
+   * from the window rather than guessed from the screen's size. A control outside it is under a
+   * bar, which is where a tap goes to the system instead of the app.
+   */
+  private fun safeArea(): Rect {
+    val insets = ViewCompat.getRootWindowInsets(composeRule.activity.window.decorView)
+    val bars = insets?.getInsets(WindowInsetsCompat.Type.systemBars())
+    val (width, height) = windowSize()
+    return Rect(
+      left = (bars?.left ?: 0).toFloat(),
+      top = (bars?.top ?: 0).toFloat(),
+      right = width - (bars?.right ?: 0),
+      bottom = height - (bars?.bottom ?: 0),
+    )
+  }
+
+  /** The app's own window, in the pixels the insets and the bounds are measured in. */
+  private fun windowSize(): Pair<Float, Float> {
+    var width = 0
+    var height = 0
+    InstrumentationRegistry.getInstrumentation().runOnMainSync {
+      width = composeRule.activity.window.decorView.width
+      height = composeRule.activity.window.decorView.height
+    }
+    return width.toFloat() to height.toFloat()
   }
 
   /**
@@ -785,6 +863,19 @@ class SettingsPresetWorkflowTest {
     eventually {
       tapControl(composeRule.onNodeWithContentDescription("Settings"))
       composeRule.onNodeWithText("Premade items").assertExists()
+    }
+  }
+
+  /**
+   * Opens settings in a shape where the premade list is off the screen. The way in is still the
+   * fridge's own control, and the way to know it worked is the title the bar changes to, because a
+   * row further down a list that has not been scrolled to is not composed at all and never will be
+   * in a window this short.
+   */
+  private fun openSettingsFromTheFridge() {
+    eventually {
+      if (nodeCount("Appearance") == 0) tapControl(composeRule.onNodeWithContentDescription("Settings"))
+      composeRule.onNodeWithText("Settings").assertExists()
     }
   }
 
@@ -1153,6 +1244,9 @@ private const val ThreeButtonOverlay = "com.android.internal.systemui.navbar.thr
 
 /** The gesture navigation the device offers, switched through its own system overlay. */
 private const val GestureOverlay = "com.android.internal.systemui.navbar.gestural"
+
+/** How big the bar draws its back control in portrait, which a shorter bar may not go below. */
+private const val StockControlHeightDp = 40f
 
 /** Settings live in their own preference files, so each test starts from the bundled defaults. */
 internal class CleanSettingsRule : TestWatcher() {
