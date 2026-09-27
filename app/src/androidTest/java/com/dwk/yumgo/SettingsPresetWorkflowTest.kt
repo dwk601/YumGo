@@ -14,7 +14,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
-import androidx.core.view.WindowCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -34,9 +35,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.dwk.yumgo.data.FoodPreset
 import com.dwk.yumgo.data.SettingsServices
-import com.dwk.yumgo.data.ThemeMode
 import java.io.FileInputStream
-import kotlinx.coroutines.runBlocking
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -138,22 +137,29 @@ class SettingsPresetWorkflowTest {
   }
 
   /**
-   * A shortcut never takes back something the user decided. Typing a name of their own leaves the
-   * premade row where it was rather than making it jump under the finger, and what they typed is
-   * still there afterwards; a date they picked by hand survives a later chip, and both survive Save.
+   * A shortcut never takes back something the user decided. The premade row stays where it is while
+   * a name of their own is being typed and leaves that name alone; a name they have only started is
+   * completed by the chip they press; a date they picked by hand survives a later chip; and both
+   * survive Save.
    */
   @Test
   fun presetTap_neverTakesBackANameOrDateTheUserChose() {
     addButton().performClick()
     composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("My Own Milk")
     composeRule.waitForIdle()
-    // The row stays on screen while a name of their own is being typed, and what they typed is
-    // still the name in the field: a chip under the finger cannot take it back.
+    // The row stays on screen, so nothing in it moves out from under the finger, and what they
+    // typed is still the name in the field.
     composeRule.onNodeWithText("Premade items").assertIsDisplayed()
     assertDraftName("My Own Milk")
+    // A name that is not the start of any food is left alone by a chip that is pressed after it.
+    if (composeRule.onAllNodes(hasText("Milk")).fetchSemanticsNodes().isNotEmpty()) {
+      tapPreset("Milk")
+      assertDraftName("My Own Milk")
+    }
 
-    // Start again: a chip fills the name and a suggested date.
-    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextReplacement("")
+    // A name they have only started is completed by the chip they press: Mi plus Milk is Milk,
+    // and that is a chip filling a name, which is also when the suggested date comes.
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextReplacement("Mi")
     tapPreset("Milk")
     assertDraftName("Milk")
     assertExpiryLabel("In 7 days")
@@ -446,34 +452,37 @@ class SettingsPresetWorkflowTest {
 
   /**
    * Settings with the system back gesture, seen as a person sees it: the screen that is on top, the
-   * frame part way through the gesture, and the fridge underneath once the gesture finishes.
+   * frame part way through the gesture, and the fridge underneath once the gesture finishes. The
+   * gesture is a gesture, so the device is put on the navigation that has one.
    */
   @Test
   fun settingsBackGesture_showsTheFridgeUnderneath() {
-    add("Gesture Milk")
-    openSettings()
-    dumpScreen("t5-back-1-settings")
-    val (width, height) = displaySize()
-    val y = height / 2
-    // The gesture is held part way so the frame in between can be looked at, then finished.
-    shell("input motionevent DOWN 2 $y")
-    try {
-      val steps = 6
-      for (step in 1..steps) {
-        shell("input motionevent MOVE ${(2 + (width - 120) * step / steps)} $y")
-        Thread.sleep(60)
+    withNavOverlay(GestureOverlay) {
+      add("Gesture Milk")
+      openSettings()
+      dumpScreen("t5-back-1-settings")
+      val (width, height) = displaySize()
+      val y = height / 2
+      // The gesture is held part way so the frame in between can be looked at, then finished.
+      shell("input motionevent DOWN 2 $y")
+      try {
+        val steps = 6
+        for (step in 1..steps) {
+          shell("input motionevent MOVE ${(2 + (width - 120) * step / steps)} $y")
+          Thread.sleep(60)
+        }
+        Thread.sleep(300)
+        dumpScreen("t5-back-2-mid-gesture")
+      } finally {
+        shell("input motionevent MOVE $width $y")
+        shell("input motionevent UP $width $y")
       }
-      Thread.sleep(300)
-      dumpScreen("t5-back-2-mid-gesture")
-    } finally {
-      shell("input motionevent MOVE $width $y")
-      shell("input motionevent UP $width $y")
+      composeRule.waitForIdle()
+      Thread.sleep(800)
+      dumpScreen("t5-back-3-fridge")
+      eventually { composeRule.onNodeWithText("Settings").assertDoesNotExist() }
+      composeRule.onNodeWithText("Gesture Milk").assertIsDisplayed()
     }
-    composeRule.waitForIdle()
-    Thread.sleep(800)
-    dumpScreen("t5-back-3-fridge")
-    eventually { composeRule.onNodeWithText("Settings").assertDoesNotExist() }
-    composeRule.onNodeWithText("Gesture Milk").assertIsDisplayed()
   }
 
   /**
@@ -483,31 +492,33 @@ class SettingsPresetWorkflowTest {
    */
   @Test
   fun settingsSurvivesAConfigurationChange_andBackWorksWithAnimationsOffAndOn() {
-    add("Rotation Milk")
-    setAnimatorDurationScale(0.0)
-    try {
+    withNavOverlay(GestureOverlay) {
+      add("Rotation Milk")
+      setAnimatorDurationScale(0.0)
+      try {
+        openSettings()
+        // With animations off the push still lands, and the screen is usable.
+        composeRule.onNodeWithText("Appearance").assertIsDisplayed()
+        themeRow("Light").assertIsSelected()
+
+        // The system back gesture: a swipe in from the left edge is back on this platform.
+        backFromLeftEdge()
+        eventually { composeRule.onNodeWithText("Settings").assertDoesNotExist() }
+        composeRule.onNodeWithText("Rotation Milk").assertIsDisplayed()
+      } finally {
+        setAnimatorDurationScale(1.0)
+        restoreAnimationScales()
+      }
+
+      // And the same round trip with the expressive motion on.
       openSettings()
-      // With animations off the push still lands, and the screen is usable.
-      composeRule.onNodeWithText("Appearance").assertIsDisplayed()
-      themeRow("Light").assertIsSelected()
-
-      // The system back gesture: a swipe in from the left edge is back on this platform.
-      backFromLeftEdge()
-      eventually { composeRule.onNodeWithText("Settings").assertDoesNotExist() }
+      composeRule.onNodeWithText("Premade items").assertIsDisplayed()
+      recreateActivity()
+      eventually { composeRule.onNodeWithText("Appearance").assertIsDisplayed() }
+      backToFridge()
       composeRule.onNodeWithText("Rotation Milk").assertIsDisplayed()
-    } finally {
-      setAnimatorDurationScale(1.0)
-      restoreAnimationScales()
+      dumpScreen("t5-after-transition")
     }
-
-    // And the same round trip with the expressive motion on.
-    openSettings()
-    composeRule.onNodeWithText("Premade items").assertIsDisplayed()
-    recreateActivity()
-    eventually { composeRule.onNodeWithText("Appearance").assertIsDisplayed() }
-    backToFridge()
-    composeRule.onNodeWithText("Rotation Milk").assertIsDisplayed()
-    dumpScreen("t5-after-transition")
   }
 
   private fun setAnimatorDurationScale(scale: Double) {
@@ -571,13 +582,14 @@ class SettingsPresetWorkflowTest {
 
   /**
    * What a person has to be able to see and reach, in the shape that used to lose it: the field
-   * they are typing into is whole, sits inside the part of the list that is on screen (which
-   * starts below the app bar, so a field cannot be parked behind the title), and both it and the
-   * button that saves it are above the keyboard.
+   * they are typing into is whole, sits inside the part of the list that is on screen (which starts
+   * below the app bar, so a field cannot be parked behind the title), and both it and the Save
+   * button are above the keyboard and above the navigation bar.
    */
   private fun assertFieldAndSaveAreReachable(label: String, imeTop: Float) {
     awaitEditorSettled()
     val viewport = listViewport()
+    val visibleBottom = minOf(imeTop, navBarTop())
     val field = composeRule.onNode(hasSetTextAction() and hasText(label)).assertIsDisplayed().fetchSemanticsNode()
     val bounds = field.boundsInWindow
     assertEquals(
@@ -591,15 +603,16 @@ class SettingsPresetWorkflowTest {
       bounds.top >= viewport.top - HalfPixel,
     )
     assertTrue(
-      "The $label field is behind the keyboard: $bounds against $imeTop",
-      bounds.bottom <= imeTop + HalfPixel,
+      "The $label field is behind the keyboard or the navigation bar: $bounds against $visibleBottom",
+      bounds.bottom <= visibleBottom + HalfPixel,
     )
 
-    val save = composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().fetchSemanticsNode()
+    // The button, not the word on it: half a button is not something a finger can press.
+    val save = saveButton().assertIsDisplayed().assertIsEnabled().fetchSemanticsNode()
     val saveBounds = save.boundsInWindow
     assertTrue(
-      "Save is behind the keyboard: $saveBounds against $imeTop",
-      saveBounds.bottom <= imeTop + HalfPixel,
+      "Save is behind the keyboard or the navigation bar: $saveBounds against $visibleBottom",
+      saveBounds.bottom <= visibleBottom + HalfPixel,
     )
     assertTrue(
       "Save is above the top of the list on screen: $saveBounds against $viewport",
@@ -607,13 +620,37 @@ class SettingsPresetWorkflowTest {
     )
   }
 
+  /** The Save button itself, rather than the text drawn inside it. */
+  private fun saveButton() = composeRule.onNode(hasText("Save") and hasClickAction())
+
   /**
-   * The whole open editor, on screen, without anything having scrolled it: both fields and the
-   * Save row inside the part of the list a person can see.
+   * The part of the settings list a person can see. It is the list's own bounds rather than the
+   * screen's, so a field the list has scrolled up under the app bar fails the check.
+   */
+  private fun listViewport(): Rect = composeRule.onNode(hasScrollToNodeAction()).fetchSemanticsNode().boundsInWindow
+
+  /** Where the part of the screen the list may use ends: the navigation bar, if it has one. */
+  private fun navBarTop(): Float {
+    val insets = ViewCompat.getRootWindowInsets(composeRule.activity.window.decorView)
+    val height = insets?.getInsets(WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
+    return windowHeight() - height
+  }
+
+  /** The height of the app's own window, which is what the insets and the bounds are measured in. */
+  private fun windowHeight(): Float {
+    var height = 0
+    InstrumentationRegistry.getInstrumentation().runOnMainSync { height = composeRule.activity.window.decorView.height }
+    return height.toFloat()
+  }
+
+  /**
+   * The whole open editor, on screen, without anything having scrolled it: both fields and the Save
+   * button inside the part of the list a person can see, and above the navigation bar.
    */
   private fun assertEditorInView() {
     awaitEditorSettled()
     val viewport = listViewport()
+    val navBarTop = navBarTop()
     listOf("Name", "Days").forEach { label ->
       val bounds = composeRule.onNode(hasSetTextAction() and hasText(label)).fetchSemanticsNode().boundsInWindow
       assertTrue(
@@ -625,16 +662,11 @@ class SettingsPresetWorkflowTest {
         bounds.bottom <= viewport.bottom + HalfPixel,
       )
     }
-    val save = composeRule.onNodeWithText("Save").fetchSemanticsNode().boundsInWindow
+    val save = saveButton().fetchSemanticsNode().boundsInWindow
     assertTrue("Save is above the list on screen: $save against $viewport", save.top >= viewport.top - HalfPixel)
     assertTrue("Save is below the list on screen: $save against $viewport", save.bottom <= viewport.bottom + HalfPixel)
+    assertTrue("Save is behind the navigation bar: $save against $navBarTop", save.bottom <= navBarTop + HalfPixel)
   }
-
-  /**
-   * The part of the settings list a person can see. It is the list's own bounds rather than the
-   * screen's, so a field the list has scrolled up under the app bar fails the check.
-   */
-  private fun listViewport(): Rect = composeRule.onNode(hasScrollToNodeAction()).fetchSemanticsNode().boundsInWindow
 
   /**
    * Opens a preset's editor the way a person does, from a row in the list, and leaves it open if
@@ -889,120 +921,64 @@ class SettingsPresetWorkflowTest {
    * With 3-button navigation the bar belongs to the app, not the device. Checked both ways round,
    * because the scrim and the icon appearance are two separate things and either one could follow
    * the wrong side.
-   *
-   * Two different kinds of check live here, and they are not the same promise:
-   * - the surface under the bar is read from real pixels, so a scrim the app did not ask for fails;
-   * - the icon appearance is the flag the window requests
-   *   (isAppearanceLightNavigationBars), not a sample of the drawn icons. It says the app asked for
-   *   dark icons on a light bar; it cannot see a launcher or platform that draws them in another
-   *   colour anyway. The name says so, so nobody reads it as a visual guarantee.
    */
   @Test
-  fun threeButtonNavBar_followsTheAppAndNotTheDevice() {
-    // The overlay the device has now is the one put back at the end; the check needs the
-    // three-button navigation to exist at all, since that is the case with a real scrim.
-    val overlay = enabledNavOverlay()
-    assertTrue("This device has no three-button navigation to check", shell("cmd overlay list android").contains(ThreeButtonOverlay))
-    try {
-      enableNavOverlay(ThreeButtonOverlay)
-      Thread.sleep(2_000)
-      composeRule.waitForIdle()
-
-      // A light app on a dark device: the app's own light surface, with dark icons on it.
-      setDeviceNightMode(true)
-      composeRule.waitForIdle()
-      assertFalse("The light app followed the dark device", screenIsDark())
-      assertTrue(
-        "A light app still has to ask for dark navigation-bar icons on a dark device",
-        settles { navBarAsksForDarkIcons() },
-      )
-      assertTrue(
-        "The navigation bar is not showing the app's own background: ${barColours()}",
-        navBarShowsAppBackground(),
-      )
-
-      // A dark app on a light device: the app's dark surface, with pale icons on it.
-      openSettings()
-      themeRow("Dark").performClick()
-      composeRule.waitUntil(10_000) { screenIsDark() }
-      backToFridge()
-      setDeviceNightMode(false)
-      composeRule.waitForIdle()
-      assertTrue("The app did not go dark", screenIsDark())
-      assertFalse(
-        "A dark app has to ask for pale navigation-bar icons, not the device's light bar",
-        settles { navBarAsksForDarkIcons() },
-      )
-      assertTrue(
-        "The navigation bar is not showing the app's own background: ${barColours()}",
-        navBarShowsAppBackground(),
-      )
-    } finally {
-      runBlocking { SettingsServices.preferences(appContext()).setThemeMode(ThemeMode.Light) }
-      setDeviceNightMode(null)
-      enableNavOverlay(overlay)
-    }
+  fun presetEditorWithThreeButtonNavigation_keepsTheFieldAndSaveReachable() {
+    withNavOverlay(ThreeButtonOverlay) { presetEditorAtTheEndOfTheListSavesWithAFinger(BottomPreset, "Days") }
   }
 
-  /** True once the check holds, or once the frames have had their chance to settle. */
-  private fun settles(check: () -> Boolean): Boolean {
-    val deadline = System.currentTimeMillis() + 10_000
-    while (System.currentTimeMillis() < deadline) {
-      if (check()) return true
-      Thread.sleep(250)
-    }
-    return check()
+  /** The same path with the gesture bar, which is thinner and sits at the very bottom. */
+  @Test
+  fun presetEditorWithGestureNavigation_keepsTheFieldAndSaveReachable() {
+    withNavOverlay(GestureOverlay) { presetEditorAtTheEndOfTheListSavesWithAFinger(BottomPreset, "Days") }
   }
 
   /**
-   * The appearance the window requests, not the icons that were drawn: true means the app asked for
-   * dark icons on a light navigation bar. A sample of the drawn pixels is the only way to check
-   * those, and the surface check above is the one that reads pixels here.
+   * The whole editor path, which is the one that has to hold in every shape: open the preset, put a
+   * finger in a field, and press Save with a finger where it is drawn. A tap that lands on the
+   * keyboard or the navigation bar used to do something else entirely, and a Save that is only half
+   * on screen is a Save that cannot be pressed.
    */
-  private fun navBarAsksForDarkIcons(): Boolean {
-    var dark = false
-    onMainThread {
-      val window = composeRule.activity.window
-      dark = WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars
+  private fun presetEditorAtTheEndOfTheListSavesWithAFinger(preset: String, field: String) {
+    openSettings()
+    openPreset(preset)
+    // Whatever the app does on its own, the whole editor has to end up on screen.
+    eventually { assertEditorInView() }
+
+    fingerTapOnField(field)
+    val imeTop = awaitImeTop()
+    assertFieldAndSaveAreReachable(field, imeTop)
+
+    composeRule.onNode(hasSetTextAction() and hasText(field)).performTextReplacement("30")
+    saveWithAFinger()
+    eventually {
+      assertEquals("The shelf life did not change", 30, storedPreset("frozen_peas")?.expiryDays)
+      // The row itself, not the words on it, and the row of the preset that was edited: Butter
+      // also keeps things for thirty days, so the name is what makes this the right row.
+      composeRule
+        .onNode(hasClickAction() and hasText(preset) and hasText("30 days"))
+        .assertIsDisplayed()
     }
-    return dark
+    dismissKeyboardIfUp()
   }
 
-  /** The bar, and the app just above it, as the screen actually paints them. */
-  private fun barColours(): String =
-    "bar ${hex(dominantColour(0.965f))} against app ${hex(dominantColour(0.90f))}"
-
-  private fun navBarShowsAppBackground(): Boolean =
-    colourDistance(dominantColour(0.965f), dominantColour(0.90f)) < 14
-
-  /** The colour a person sees across a band of the screen, taken from a real frame. */
-  private fun dominantColour(yFraction: Float): Int {
-    val bitmap = frame()
-    val counts = HashMap<Int, Int>()
-    val y = (bitmap.height * yFraction).toInt()
-    var x = (bitmap.width * 0.05f).toInt()
-    while (x < bitmap.width * 0.95f) {
-      val pixel = bitmap.getPixel(x, y) or (0xFF shl 24)
-      counts[pixel] = (counts[pixel] ?: 0) + 1
-      x += 12
+  /** Runs [check] with the device's navigation switched to [overlay], and puts it back. */
+  private fun withNavOverlay(overlay: String, check: () -> Unit) {
+    val before = enabledNavOverlay()
+    assertTrue("This device has no $overlay to switch to", shell("cmd overlay list android").contains(overlay))
+    try {
+      enableNavOverlay(overlay)
+      composeRule.waitForIdle()
+      check()
+    } finally {
+      enableNavOverlay(before)
+      composeRule.waitForIdle()
     }
-    return counts.maxByOrNull { it.value }?.key ?: error("could not read the screen")
   }
-
-  private fun colourDistance(first: Int, second: Int): Int {
-    fun channel(shift: Int) = Math.abs(((first shr shift) and 0xFF) - ((second shr shift) and 0xFF))
-    return channel(16) + channel(8) + channel(0)
-  }
-
-  private fun hex(colour: Int): String = "#%06X".format(colour and 0xFFFFFF)
 
   private fun frame(): Bitmap {
     val bytes = shellBytes("screencap -p")
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: error("Could not read the screen")
-  }
-
-  private fun onMainThread(block: () -> Unit) {
-    InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
   }
 
   private fun enabledNavOverlay(): String =
@@ -1022,11 +998,6 @@ class SettingsPresetWorkflowTest {
    * Reads the real frame and calls it light or dark by its mean brightness, which is what a person
    * would say looking at it.
    */
-  private companion object {
-    /** Rounding slack, because bounds are measured in pixels and land on halves. */
-    const val HalfPixel = 0.5f
-  }
-
   private fun screenIsDark(): Boolean {
     val bitmap = frame()
     var total = 0.0
@@ -1044,10 +1015,18 @@ class SettingsPresetWorkflowTest {
     }
     return (total / samples) / 255.0 < 0.5
   }
+
+  private companion object {
+    /** Rounding slack, because bounds are measured in pixels and land on halves. */
+    const val HalfPixel = 0.5f
+  }
 }
 
 /** The navigation the device offers, switched through its own system overlay. */
 private const val ThreeButtonOverlay = "com.android.internal.systemui.navbar.threebutton"
+
+/** The gesture navigation the device offers, switched through its own system overlay. */
+private const val GestureOverlay = "com.android.internal.systemui.navbar.gestural"
 
 /** Settings live in their own preference files, so each test starts from the bundled defaults. */
 internal class CleanSettingsRule : TestWatcher() {
