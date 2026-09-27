@@ -29,13 +29,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -70,6 +74,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
@@ -108,8 +115,16 @@ fun ItemEditor(
   modifier: Modifier = Modifier,
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  val compact = compactEditor()
   if (restored) {
-    RestoredEditor(draft = draft, presets = presets, callbacks = callbacks, backEnabled = backEnabled, modifier = modifier)
+    RestoredEditor(
+      draft = draft,
+      presets = presets,
+      callbacks = callbacks,
+      compact = compact,
+      backEnabled = backEnabled,
+      modifier = modifier,
+    )
   } else {
     ModalBottomSheet(
       onDismissRequest = { if (!draft.saving) callbacks.onDismissEditor() },
@@ -119,15 +134,47 @@ fun ItemEditor(
       shape = MaterialTheme.shapes.extraLarge,
       containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
       contentColor = MaterialTheme.colorScheme.onSurface,
+      dragHandle = { SheetHandle(compact) },
     ) {
       EditorBody(
         draft = draft,
         callbacks = callbacks,
         presets = presets,
+        compact = compact,
         requestFocus = draft.id == null,
         sheetState = sheetState,
       )
     }
+  }
+}
+
+/**
+ * True when the window is too short for the tall editor, which is what landscape with the
+ * keyboard open leaves behind. It is read from the window rather than the sheet, because the
+ * sheet measures itself while it animates and would flip the layout under the user.
+ */
+@Composable
+private fun compactEditor(): Boolean {
+  val screenHeight = LocalConfiguration.current.screenHeightDp
+  val density = LocalDensity.current
+  val keyboardDp = with(density) { WindowInsets.ime.getBottom(density).toDp() }.value.roundToInt()
+  return remember(screenHeight, keyboardDp) { screenHeight - keyboardDp < CompactRoomDp }
+}
+
+/** The handle is decorative, so a short window gets a short one. */
+@Composable
+private fun SheetHandle(compact: Boolean) {
+  if (!compact) {
+    BottomSheetDefaults.DragHandle()
+    return
+  }
+  Box(Modifier.fillMaxWidth().height(16.dp), contentAlignment = Alignment.Center) {
+    Box(
+      Modifier
+        .size(width = 32.dp, height = 4.dp)
+        .clip(RoundedCornerShape(2.dp))
+        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
+    )
   }
 }
 
@@ -136,6 +183,7 @@ private fun RestoredEditor(
   draft: ItemDraft,
   presets: List<FoodPreset>,
   callbacks: FridgeCallbacks,
+  compact: Boolean,
   backEnabled: Boolean,
   modifier: Modifier = Modifier,
 ) {
@@ -165,8 +213,15 @@ private fun RestoredEditor(
       contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
       Column(Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { BottomSheetDefaults.DragHandle() }
-        EditorBody(draft = draft, callbacks = callbacks, presets = presets, requestFocus = false, sheetState = null)
+        SheetHandle(compact)
+        EditorBody(
+          draft = draft,
+          callbacks = callbacks,
+          presets = presets,
+          compact = compact,
+          requestFocus = false,
+          sheetState = null,
+        )
       }
     }
   }
@@ -177,6 +232,7 @@ private fun EditorBody(
   draft: ItemDraft,
   callbacks: FridgeCallbacks,
   presets: List<FoodPreset>,
+  compact: Boolean,
   requestFocus: Boolean,
   sheetState: SheetState? = null,
 ) {
@@ -228,98 +284,56 @@ private fun EditorBody(
 
   BoxWithConstraints(Modifier.fillMaxWidth()) {
     Column(Modifier.fillMaxWidth().heightIn(max = maxHeight)) {
-      Column(
-        Modifier
-          .weight(1f, fill = false)
-          .verticalScroll(scroll)
-          .padding(horizontal = 20.dp)
-          .onGloballyPositioned { viewportBottom = it.boundsInWindow().bottom },
-      ) {
-        Text(
-          text = stringResource(if (draft.id == null) R.string.editor_add_title else R.string.editor_edit_title),
-          style = MaterialTheme.typography.headlineSmall,
-        )
-        Spacer(Modifier.height(16.dp))
-        OutlinedTextField(
-          value = draft.name,
-          onValueChange = { callbacks.onDraftChange(draft.copy(name = it, errorMessage = null)) },
-          modifier = Modifier.fillMaxWidth().focusRequester(focus),
-          enabled = !draft.saving,
-          singleLine = true,
-          isError = !draft.errorMessage.isNullOrBlank(),
-          label = { Text(stringResource(R.string.editor_name_label)) },
-          supportingText =
-            draft.errorMessage?.let { message ->
-              { Text(message) }
-            },
-          shape = MaterialTheme.shapes.medium,
-          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-          keyboardActions = KeyboardActions(onDone = { if (canSave) callbacks.onSave() }),
-        )
-        Spacer(Modifier.height(8.dp))
-        // The shortcuts are the fast path for the first choice. Once the name is the user's own
-        // they get out of the way, which also keeps the photo section reachable above the keyboard.
-        if (draft.id == null && presets.isNotEmpty() && (draft.name.isBlank() || draft.presetId != null)) {
-          PresetRow(
-            presets = presets,
-            selectedId = draft.presetId,
+      // A short window cannot fit the field and Save as separate rows, so they share one and
+      // everything else scrolls underneath. The focused field and Save stay on screen either way.
+      if (compact) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          NameField(
+            draft = draft,
+            focus = focus,
             enabled = !draft.saving,
-            onPreset = callbacks.onPresetSelected,
+            canSave = canSave,
+            callbacks = callbacks,
+            modifier = Modifier.weight(1f),
           )
-          Spacer(Modifier.height(16.dp))
+          Spacer(Modifier.width(12.dp))
+          SaveButton(
+            draft = draft,
+            canSave = canSave,
+            compact = true,
+            onSave = callbacks.onSave,
+            modifier = Modifier.widthIn(min = 96.dp),
+          )
         }
-        Spacer(Modifier.height(8.dp))
-        Text(text = stringResource(R.string.editor_quantity_label), style = MaterialTheme.typography.labelLarge)
-        QuantityStepper(
-          quantity = draft.quantity,
-          name = draft.name.ifBlank { stringResource(R.string.editor_name_label) },
-          onQuantityChange = { callbacks.onDraftChange(draft.copy(quantity = it, errorMessage = null)) },
-          enabled = !draft.saving,
-          modifier = Modifier.padding(top = 8.dp),
+        EditorFields(
+          draft = draft,
+          callbacks = callbacks,
+          presets = presets,
+          modifier = Modifier.weight(1f, fill = false).editorScroll(scroll) { viewportBottom = it },
+          onPickDate = { pickingDate = true },
+          onMessageBounds = { messageBottom = it },
         )
-        Spacer(Modifier.height(16.dp))
-        ExpiryRow(draft = draft, enabled = !draft.saving, onPick = { pickingDate = true }, onClear = {
-          callbacks.onDraftChange(draft.copy(expiryEpochDay = null, errorMessage = null))
-        })
-        Spacer(Modifier.height(16.dp))
-        PhotoRow(draft = draft, callbacks = callbacks, onMessageBounds = { messageBottom = it })
-        Spacer(Modifier.height(8.dp))
-        if (draft.id != null) {
-          TextButton(
-            onClick = { callbacks.onDelete(draft.id) },
-            enabled = !draft.saving,
-            modifier = Modifier.heightIn(min = 48.dp),
-          ) {
-            Icon(
-              FridgeDelete,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.error,
-              modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-            Text(stringResource(R.string.editor_delete), color = MaterialTheme.colorScheme.error)
-          }
-        }
-      }
-      val saveFade = motionFade<Float>()
-      Button(
-        onClick = callbacks.onSave,
-        enabled = canSave,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp).heightIn(min = 52.dp),
-        shape = MaterialTheme.shapes.extraLarge,
-      ) {
-        AnimatedContent(
-          targetState = draft.saving,
-          transitionSpec = { fadeIn(saveFade) togetherWith fadeOut(saveFade) },
-          label = "save",
-        ) { saving ->
-          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (saving) {
-              LoadingIndicator(modifier = Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary)
-            }
-            Text(stringResource(if (saving) R.string.editor_saving else R.string.editor_save))
-          }
-        }
+      } else {
+        EditorFields(
+          draft = draft,
+          callbacks = callbacks,
+          presets = presets,
+          focus = focus,
+          canSave = canSave,
+          modifier = Modifier.weight(1f, fill = false).editorScroll(scroll) { viewportBottom = it },
+          onPickDate = { pickingDate = true },
+          onMessageBounds = { messageBottom = it },
+        )
+        SaveButton(
+          draft = draft,
+          canSave = canSave,
+          compact = false,
+          onSave = callbacks.onSave,
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        )
       }
     }
   }
@@ -336,10 +350,153 @@ private fun EditorBody(
   }
 }
 
+/** The editor's scrolling column, reported so the editor can scroll a photo notice into view. */
+private fun Modifier.editorScroll(scroll: ScrollState, onViewportBottom: (Float) -> Unit): Modifier =
+  verticalScroll(scroll)
+    .padding(horizontal = 20.dp)
+    .onGloballyPositioned { onViewportBottom(it.boundsInWindow().bottom) }
+
 /**
- * Premade foods as one scrolling row of fills, shown only while adding. A tap writes the name
- * and a suggested date into the draft; Save is still the only thing that adds the item.
+ * The scrolling part of the editor, from the title down to Remove. With [focus] it also carries
+ * the name field, which is how the tall layout works; in a short window the field is pinned
+ * beside Save instead and this column starts under it.
  */
+@Composable
+private fun EditorFields(
+  draft: ItemDraft,
+  callbacks: FridgeCallbacks,
+  presets: List<FoodPreset>,
+  modifier: Modifier = Modifier,
+  focus: FocusRequester? = null,
+  canSave: Boolean = false,
+  onPickDate: () -> Unit,
+  onMessageBounds: (Float) -> Unit,
+) {
+  Column(modifier) {
+    Text(
+      text = stringResource(if (draft.id == null) R.string.editor_add_title else R.string.editor_edit_title),
+      style = MaterialTheme.typography.headlineSmall,
+    )
+    Spacer(Modifier.height(16.dp))
+    if (focus != null) {
+      NameField(
+        draft = draft,
+        focus = focus,
+        enabled = !draft.saving,
+        canSave = canSave,
+        callbacks = callbacks,
+        modifier = Modifier.fillMaxWidth(),
+      )
+      Spacer(Modifier.height(8.dp))
+    }
+    // The shortcuts are the fast path for the first choice. Once the name is the user's own
+    // they get out of the way, which also keeps the photo section reachable above the keyboard.
+    if (draft.id == null && presets.isNotEmpty() && (draft.name.isBlank() || draft.presetId != null)) {
+      PresetRow(
+        presets = presets,
+        selectedId = draft.presetId,
+        enabled = !draft.saving,
+        onPreset = callbacks.onPresetSelected,
+      )
+      Spacer(Modifier.height(16.dp))
+    }
+    Spacer(Modifier.height(8.dp))
+    Text(text = stringResource(R.string.editor_quantity_label), style = MaterialTheme.typography.labelLarge)
+    QuantityStepper(
+      quantity = draft.quantity,
+      name = draft.name.ifBlank { stringResource(R.string.editor_name_label) },
+      onQuantityChange = { callbacks.onDraftChange(draft.copy(quantity = it, errorMessage = null)) },
+      enabled = !draft.saving,
+      modifier = Modifier.padding(top = 8.dp),
+    )
+    Spacer(Modifier.height(16.dp))
+    ExpiryRow(draft = draft, enabled = !draft.saving, onPick = onPickDate, onClear = {
+      callbacks.onDraftChange(draft.copy(expiryEpochDay = null, errorMessage = null))
+    })
+    Spacer(Modifier.height(16.dp))
+    PhotoRow(draft = draft, callbacks = callbacks, onMessageBounds = onMessageBounds)
+    Spacer(Modifier.height(8.dp))
+    if (draft.id != null) {
+      TextButton(
+        onClick = { callbacks.onDelete(draft.id) },
+        enabled = !draft.saving,
+        modifier = Modifier.heightIn(min = 48.dp),
+      ) {
+        Icon(
+          FridgeDelete,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.error,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+        Text(stringResource(R.string.editor_delete), color = MaterialTheme.colorScheme.error)
+      }
+    }
+  }
+}
+
+/** The one field the user types in. It is pinned in a short window and scrolls in a tall one. */
+@Composable
+private fun NameField(
+  draft: ItemDraft,
+  focus: FocusRequester,
+  enabled: Boolean,
+  canSave: Boolean,
+  callbacks: FridgeCallbacks,
+  modifier: Modifier = Modifier,
+) {
+  OutlinedTextField(
+    value = draft.name,
+    onValueChange = { callbacks.onDraftChange(draft.copy(name = it, errorMessage = null)) },
+    modifier = modifier.focusRequester(focus),
+    enabled = enabled,
+    singleLine = true,
+    isError = !draft.errorMessage.isNullOrBlank(),
+    label = { Text(stringResource(R.string.editor_name_label)) },
+    supportingText =
+      draft.errorMessage?.let { message ->
+        { Text(message) }
+      },
+    shape = MaterialTheme.shapes.medium,
+    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+    keyboardActions = KeyboardActions(onDone = { if (canSave) callbacks.onSave() }),
+  )
+}
+
+/** Save, full width in a tall window and beside the name in a short one. */
+@Composable
+private fun SaveButton(
+  draft: ItemDraft,
+  canSave: Boolean,
+  compact: Boolean,
+  onSave: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val saveFade = motionFade<Float>()
+  Button(
+    onClick = onSave,
+    enabled = canSave,
+    modifier =
+      modifier.then(
+        if (compact) Modifier.heightIn(min = 48.dp) else Modifier.padding(vertical = 12.dp).heightIn(min = 52.dp),
+      ),
+    shape = MaterialTheme.shapes.extraLarge,
+  ) {
+    AnimatedContent(
+      targetState = draft.saving,
+      transitionSpec = { fadeIn(saveFade) togetherWith fadeOut(saveFade) },
+      label = "save",
+    ) { saving ->
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (saving) {
+          LoadingIndicator(modifier = Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary)
+        }
+        Text(stringResource(if (saving) R.string.editor_saving else R.string.editor_save))
+      }
+    }
+  }
+}
+
 @Composable
 private fun PresetRow(
   presets: List<FoodPreset>,
@@ -528,6 +685,12 @@ private fun ExpiryDialog(epochDay: Long?, onConfirm: (Long?) -> Unit, onDismiss:
 
 @Composable
 private fun <T> motionFade(): FiniteAnimationSpec<T> = MaterialTheme.motionScheme.fastEffectsSpec()
+
+/**
+ * Window height, keyboard included, below which the editor drops its title and puts the name
+ * field beside Save. Landscape with a keyboard open is the case that needs it.
+ */
+private val CompactRoomDp = 320
 
 /** How long the editor waits for the sheet to be measured before revealing a photo problem. */
 private const val RevealWaitMillis = 1_500L
