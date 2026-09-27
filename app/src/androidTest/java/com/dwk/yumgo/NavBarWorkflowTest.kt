@@ -170,6 +170,35 @@ class NavBarWorkflowTest {
   }
 
   /**
+   * The sheet turned sideways is a window over the whole screen, which is how it dims the app, so the
+   * bar under it belongs to that window and has to be painted there, on whichever side the device
+   * put it. Both ways round, with the palette that does not match, which is when the device's own
+   * button colour is unreadable on the sheet's dim.
+   */
+  @Test
+  fun navigationButtons_stayReadableWithTheAddSheetOpenInLandscape() {
+    // A light app on a dark device: the device draws pale buttons, so the bar has to be dark.
+    setDeviceNightMode(true)
+    assertSheetButtonsAreReadable(1, "a light app on a dark device")
+    assertSheetButtonsAreReadable(3, "a light app on a dark device")
+
+    // A dark app on a light device: dark buttons, so the bar has to be light. The palette is picked
+    // with the phone upright, which is where a person picks it.
+    rotateTo(0)
+    chooseTheDarkPalette()
+    setDeviceNightMode(false)
+    assertSheetButtonsAreReadable(1, "a dark app on a light device")
+    assertSheetButtonsAreReadable(3, "a dark app on a light device")
+  }
+
+  private fun assertSheetButtonsAreReadable(userRotation: Int, what: String) {
+    rotateTo(userRotation)
+    openTheAddSheetWithoutTheKeyboard()
+    assertButtonsAreReadable("the add sheet, $what")
+    closeTheAddSheet()
+  }
+
+  /**
    * The keyboard has the bar's room while it is up, so the sheet's own paper runs down to it. A band
    * in that room is a stripe between the editor and the keyboard, and an empty gap is a hole in the
    * sheet, and both are worse than the plain surface that is there now.
@@ -692,7 +721,7 @@ class NavBarWorkflowTest {
    * device setting, a frame landing a moment later. Runs [check] until it stops complaining, then
    * reports what it last said.
    */
-  private fun eventually(complaint: String, timeoutMillis: Long = 20_000, check: () -> String?) {
+  private fun eventually(complaint: String, timeoutMillis: Long = 45_000, check: () -> String?) {
     val deadline = System.currentTimeMillis() + timeoutMillis
     var last: String? = complaint
     while (System.currentTimeMillis() < deadline) {

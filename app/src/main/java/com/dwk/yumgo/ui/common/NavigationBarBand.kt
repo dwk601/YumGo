@@ -1,7 +1,11 @@
 package com.dwk.yumgo.ui.common
 
 import android.os.Build
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
 import android.view.Window
+import android.widget.FrameLayout
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -18,11 +22,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
@@ -52,11 +58,12 @@ import com.dwk.yumgo.theme.LightColorScheme
  * device: the app's own paper carries the buttons there, and a band would only show as a seam. The
  * keyboard, while it is up: it has the bar's room, and a band then is a stripe above it.
  *
- * What is left is drawn on the edge of the box it is composed in, which has to reach the screen's
- * edge on the bar's side for that edge to be the bar. The activity's box does, and so does the add
- * sheet's, whose caller has given it the bar's room. Content that does not reach that edge, the
- * sheet turned sideways, says so with [reachesTheScreenEdge] and gets nothing: a bar on a side is
- * never under a sheet narrower than the screen, and the activity's own band is already there.
+ * Where it is drawn depends on the window. The activity's content reaches the screen's edge on the
+ * bar's side, so the band is drawn on the edge of the box it is composed in, and so is the add
+ * sheet's in portrait, whose caller has given it the bar's room. Turned sideways the sheet is a card
+ * in the middle of a window that covers the whole screen to dim the app, so the bar under it belongs
+ * to that window and is painted there instead, over the dim: [reachesTheScreenEdge] says that the
+ * content does not reach the edge.
  *
  * The bar is read from the insets of the window this is composed in, so a phone turned sideways, and
  * a device switching between the handle and the buttons while the app is open, bring it back.
@@ -68,7 +75,6 @@ import com.dwk.yumgo.theme.LightColorScheme
  */
 @Composable
 fun BoxScope.NavigationBarBand(reachesTheScreenEdge: Boolean = true) {
-  if (!reachesTheScreenEdge) return
   val deviceDark = isSystemInDarkTheme()
   if (MaterialTheme.colorScheme.surface.isDark() == deviceDark) return
   if (WindowInsets.ime.getBottom(LocalDensity.current) > 0) return
@@ -77,7 +83,8 @@ fun BoxScope.NavigationBarBand(reachesTheScreenEdge: Boolean = true) {
   val left = insets.calculateLeftPadding(direction)
   val right = insets.calculateRightPadding(direction)
   val bottom = insets.calculateBottomPadding()
-  if (maxOf(bottom, right, left) < ButtonNavigationBarHeight) return
+  val bar = maxOf(bottom, right, left)
+  if (bar < ButtonNavigationBarHeight) return
   val colour = if (deviceDark) DarkColorScheme.surfaceContainer else LightColorScheme.surfaceContainer
 
   // The platform lays a veil of white over the bar of any window that asks for its contrast scrim,
@@ -93,13 +100,81 @@ fun BoxScope.NavigationBarBand(reachesTheScreenEdge: Boolean = true) {
   // The insets are absolute, so the band follows the edge they name rather than the edge the layout
   // reads: the bar keeps its own side however the phone is turned.
   val ltr = direction == LayoutDirection.Ltr
+  val onTheBottom = bottom >= right && bottom >= left
+  val onTheRight = right >= left
+  val density = LocalDensity.current
+  val width = with(density) { (if (onTheBottom) bottom else if (onTheRight) right else left).roundToPx() }
+  if (!reachesTheScreenEdge) {
+    // The content stops short of the bar, which is the add sheet turned sideways: its window covers
+    // the whole screen to dim the app, so the bar under it belongs to that window. A plain view in
+    // the window's decor is the only place a band can go on the bar's side there, above the dim,
+    // because the sheet's own content is a card in the middle of the screen and anything drawn
+    // outside that card is clipped away.
+    BarEdge(window, colour, width, onTheBottom, onTheRight, ltr)
+    return
+  }
   val band =
     when {
-      bottom >= right && bottom >= left -> Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bottom)
-      right >= left -> Modifier.align(if (ltr) Alignment.CenterEnd else Alignment.CenterStart).fillMaxHeight().width(right)
+      onTheBottom -> Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bottom)
+      onTheRight -> Modifier.align(if (ltr) Alignment.CenterEnd else Alignment.CenterStart).fillMaxHeight().width(right)
       else -> Modifier.align(if (ltr) Alignment.CenterStart else Alignment.CenterEnd).fillMaxHeight().width(left)
     }
   Box(modifier = band.background(colour))
+}
+
+/**
+ * The bar's own surface, painted by a view on top of the window's content: the last thing that
+ * window draws, so it is over the sheet and over the dim the sheet puts on the app.
+ *
+ * The view goes in once per window and is never taken out again: the window owns its content view
+ * and pulls a child out from under it while the window is detaching, which is a crash. After that it
+ * is only painted, shown, hidden and measured, which is all a bar does when the phone is turned.
+ */
+@Composable
+private fun BarEdge(
+  window: Window?,
+  colour: Color,
+  width: Int,
+  onTheBottom: Boolean,
+  onTheRight: Boolean,
+  ltr: Boolean,
+) {
+  val gravity =
+    when {
+      onTheBottom -> Gravity.BOTTOM
+      onTheRight -> if (ltr) Gravity.END else Gravity.START
+      else -> if (ltr) Gravity.START else Gravity.END
+    }
+  val band = remember { mutableStateOf<View?>(null) }
+  DisposableEffect(window) {
+    band.value = window?.let { bandOn(it) }
+    onDispose { band.value?.visibility = View.GONE }
+  }
+  DisposableEffect(band.value, width, gravity, colour) {
+    val view = band.value
+    if (view == null || width <= 0) {
+      onDispose {}
+    } else {
+      view.setBackgroundColor(colour.toArgb())
+      view.layoutParams =
+        FrameLayout.LayoutParams(
+          if (onTheBottom) FrameLayout.LayoutParams.MATCH_PARENT else width,
+          if (onTheBottom) width else FrameLayout.LayoutParams.MATCH_PARENT,
+          gravity,
+        )
+      view.visibility = View.VISIBLE
+      view.requestLayout()
+      onDispose { view.visibility = View.GONE }
+    }
+  }
+}
+
+/** A view of the bar's own size and colour, on the last layer of the window's content. */
+private fun bandOn(window: Window): View? {
+  val content = window.findViewById(android.R.id.content) as? ViewGroup ?: return null
+  val band = View(window.context)
+  content.addView(band, FrameLayout.LayoutParams(0, 0))
+  return band
 }
 
 /**

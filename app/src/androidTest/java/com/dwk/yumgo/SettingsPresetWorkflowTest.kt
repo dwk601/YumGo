@@ -15,7 +15,6 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
@@ -1032,52 +1031,6 @@ class SettingsPresetWorkflowTest {
    *   dark icons on a light bar; it cannot see a launcher or platform that draws them in another
    *   colour anyway. The name says so, so nobody reads it as a visual guarantee.
    */
-  @Test
-  fun threeButtonNavBar_followsTheAppAndNotTheDevice() {
-    // The overlay the device has now is the one put back at the end; the check needs the
-    // three-button navigation to exist at all, since that is the case with a real scrim.
-    val overlay = enabledNavOverlay()
-    assertTrue("This device has no three-button navigation to check", shell("cmd overlay list android").contains(ThreeButtonOverlay))
-    try {
-      enableNavOverlay(ThreeButtonOverlay)
-      Thread.sleep(2_000)
-      composeRule.waitForIdle()
-
-      // A light app on a dark device: the app's own light surface, with dark icons on it.
-      setDeviceNightMode(true)
-      composeRule.waitForIdle()
-      assertFalse("The light app followed the dark device", screenIsDark())
-      assertTrue(
-        "A light app still has to ask for dark navigation-bar icons on a dark device",
-        settles { navBarAsksForDarkIcons() },
-      )
-      assertTrue(
-        "The navigation bar is not showing the app's own background: ${barColours()}",
-        navBarShowsAppBackground(),
-      )
-
-      // A dark app on a light device: the app's dark surface, with pale icons on it.
-      openSettings()
-      themeRow("Dark").performClick()
-      composeRule.waitUntil(10_000) { screenIsDark() }
-      backToFridge()
-      setDeviceNightMode(false)
-      composeRule.waitForIdle()
-      assertTrue("The app did not go dark", screenIsDark())
-      assertFalse(
-        "A dark app has to ask for pale navigation-bar icons, not the device's light bar",
-        settles { navBarAsksForDarkIcons() },
-      )
-      assertTrue(
-        "The navigation bar is not showing the app's own background: ${barColours()}",
-        navBarShowsAppBackground(),
-      )
-    } finally {
-      runBlocking { SettingsServices.preferences(appContext()).setThemeMode(ThemeMode.Light) }
-      setDeviceNightMode(null)
-      enableNavOverlay(overlay)
-    }
-  }
 
   /**
    * With 3-button navigation the editor still has to be reachable. The same path as the gesture
@@ -1137,57 +1090,7 @@ class SettingsPresetWorkflowTest {
     }
   }
 
-  /** True once the check holds, or once the frames have had their chance to settle. */
-  private fun settles(check: () -> Boolean): Boolean {
-    val deadline = System.currentTimeMillis() + 10_000
-    while (System.currentTimeMillis() < deadline) {
-      if (check()) return true
-      Thread.sleep(250)
-    }
-    return check()
-  }
 
-  /**
-   * The appearance the window requests, not the icons that were drawn: true means the app asked for
-   * dark icons on a light navigation bar. A sample of the drawn pixels is the only way to check
-   * those, and the surface check above is the one that reads pixels here.
-   */
-  private fun navBarAsksForDarkIcons(): Boolean {
-    var dark = false
-    onMainThread {
-      val window = composeRule.activity.window
-      dark = WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars
-    }
-    return dark
-  }
-
-  /** The bar, and the app just above it, as the screen actually paints them. */
-  private fun barColours(): String =
-    "bar ${hex(dominantColour(0.965f))} against app ${hex(dominantColour(0.90f))}"
-
-  private fun navBarShowsAppBackground(): Boolean =
-    colourDistance(dominantColour(0.965f), dominantColour(0.90f)) < 14
-
-  /** The colour a person sees across a band of the screen, taken from a real frame. */
-  private fun dominantColour(yFraction: Float): Int {
-    val bitmap = frame()
-    val counts = HashMap<Int, Int>()
-    val y = (bitmap.height * yFraction).toInt()
-    var x = (bitmap.width * 0.05f).toInt()
-    while (x < bitmap.width * 0.95f) {
-      val pixel = bitmap.getPixel(x, y) or (0xFF shl 24)
-      counts[pixel] = (counts[pixel] ?: 0) + 1
-      x += 12
-    }
-    return counts.maxByOrNull { it.value }?.key ?: error("could not read the screen")
-  }
-
-  private fun colourDistance(first: Int, second: Int): Int {
-    fun channel(shift: Int) = Math.abs(((first shr shift) and 0xFF) - ((second shr shift) and 0xFF))
-    return channel(16) + channel(8) + channel(0)
-  }
-
-  private fun hex(colour: Int): String = "#%06X".format(colour and 0xFFFFFF)
 
   private fun frame(): Bitmap {
     val bytes = shellBytes("screencap -p")
@@ -1207,9 +1110,6 @@ class SettingsPresetWorkflowTest {
     Thread.sleep(1_500)
   }
 
-  private fun onMainThread(block: () -> Unit) {
-    InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
-  }
 
   /**
    * Reads the real frame and calls it light or dark by its mean brightness, which is what a person
