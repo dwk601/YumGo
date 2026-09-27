@@ -568,9 +568,16 @@ class SettingsPresetWorkflowTest {
   }
 
   /**
-   * With 3-button navigation the bar belongs to the app, not the device: the icons and the surface
-   * under them both follow the app's palette. Checked both ways round, because the scrim and the
-   * icon tint are two separate things and either one could follow the wrong side.
+   * With 3-button navigation the bar belongs to the app, not the device. Checked both ways round,
+   * because the scrim and the icon appearance are two separate things and either one could follow
+   * the wrong side.
+   *
+   * Two different kinds of check live here, and they are not the same promise:
+   * - the surface under the bar is read from real pixels, so a scrim the app did not ask for fails;
+   * - the icon appearance is the flag the window requests
+   *   (isAppearanceLightNavigationBars), not a sample of the drawn icons. It says the app asked for
+   *   dark icons on a light bar; it cannot see a launcher or platform that draws them in another
+   *   colour anyway. The name says so, so nobody reads it as a visual guarantee.
    */
   @Test
   fun threeButtonNavBar_followsTheAppAndNotTheDevice() {
@@ -588,8 +595,8 @@ class SettingsPresetWorkflowTest {
       composeRule.waitForIdle()
       assertFalse("The light app followed the dark device", screenIsDark())
       assertTrue(
-        "A light app still needs dark navigation-bar icons on a dark device",
-        settles { navBarIconsAreDark() },
+        "A light app still has to ask for dark navigation-bar icons on a dark device",
+        settles { navBarAsksForDarkIcons() },
       )
       assertTrue(
         "The navigation bar is not showing the app's own background: ${barColours()}",
@@ -605,8 +612,8 @@ class SettingsPresetWorkflowTest {
       composeRule.waitForIdle()
       assertTrue("The app did not go dark", screenIsDark())
       assertFalse(
-        "A dark app needs pale navigation-bar icons, not the device's light bar",
-        settles { navBarIconsAreDark() },
+        "A dark app has to ask for pale navigation-bar icons, not the device's light bar",
+        settles { navBarAsksForDarkIcons() },
       )
       assertTrue(
         "The navigation bar is not showing the app's own background: ${barColours()}",
@@ -629,8 +636,12 @@ class SettingsPresetWorkflowTest {
     return check()
   }
 
-  /** What the window asked for: light icons mean a light bar under them. */
-  private fun navBarIconsAreDark(): Boolean {
+  /**
+   * The appearance the window requests, not the icons that were drawn: true means the app asked for
+   * dark icons on a light navigation bar. A sample of the drawn pixels is the only way to check
+   * those, and the surface check above is the one that reads pixels here.
+   */
+  private fun navBarAsksForDarkIcons(): Boolean {
     var dark = false
     onMainThread {
       val window = composeRule.activity.window

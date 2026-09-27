@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.content.res.Configuration.ORIENTATION_LANDSCAPE
 import android.content.res.Configuration.ORIENTATION_PORTRAIT
 import android.database.sqlite.SQLiteDatabase
+import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.compose.ui.test.assertIsDisplayed
@@ -25,7 +26,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.io.FileInputStream
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -313,16 +313,26 @@ class FridgeWorkflowTest {
           .fetchSemanticsNode()
       val fieldBottom = field.positionOnScreen.y + field.size.height
       assertTrue("The text is behind the keyboard at $fieldBottom against $imeTop", fieldBottom <= imeTop)
-      // And nothing is drawn over it. A compact layout that puts the field in the row beside Save
-      // leaves the sheet's own handle sitting on top of what the user is typing, which a keyboard
-      // check alone cannot see.
-      val handle = composeRule.onAllNodes(hasContentDescription("Drag handle")).fetchSemanticsNodes().firstOrNull()
-      if (handle != null) {
-        assertFalse(
-          "The sheet's handle is drawn over the name field: ${field.boundsInRoot} under ${handle.boundsInRoot}",
-          field.boundsInRoot.overlaps(handle.boundsInRoot),
-        )
-      }
+
+      // The field has to be whole. A short editor that pushed it up clipped it at the top of the
+      // sheet, which leaves a field that is still "displayed" and still above the keyboard, so
+      // the bounds the field is drawn in are compared with the bounds it was given.
+      val fieldBounds = field.boundsInRoot
+      assertEquals(
+        "The name field is clipped to $fieldBounds of ${field.size}",
+        field.size.height.toFloat(),
+        fieldBounds.height,
+        HalfPixel,
+      )
+      // And it starts below the top of what the screen is showing, not behind the status bar.
+      assertTrue(
+        "The name field runs off the top of the screen: $fieldBounds",
+        fieldBounds.top >= 0f,
+      )
+      // Finally, the text the user typed has to be painted where the field says it is, rather
+      // than hidden behind something drawn over the field.
+      val drawn = darkPixelsIn(fieldBounds, fromFraction = 0.5f)
+      assertTrue("Nothing is drawn in the lower half of the name field $fieldBounds, so the text is covered", drawn >= MinimumGlyphPixels)
       val save = composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().fetchSemanticsNode()
       val saveBottom = save.positionOnScreen.y + save.size.height
       assertTrue("Save is behind the keyboard at $saveBottom against $imeTop", saveBottom <= imeTop)
@@ -341,6 +351,33 @@ class FridgeWorkflowTest {
       deviceSetting("system", "user_rotation", rotation)
       deviceSetting("system", "accelerometer_rotation", autoRotate)
     }
+  }
+
+  /**
+   * Dark pixels inside the lower part of a rect on the real screen. A field showing the text the
+   * user typed has glyphs in it; a field covered by the sheet's own chrome has none.
+   */
+  private fun darkPixelsIn(bounds: androidx.compose.ui.geometry.Rect, fromFraction: Float): Int {
+    val bytes = screencapBytes()
+    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: error("Could not read the screen")
+    val left = bounds.left.toInt().coerceIn(0, bitmap.width - 1)
+    val right = bounds.right.toInt().coerceIn(left + 1, bitmap.width)
+    val top = (bounds.top + bounds.height * fromFraction).toInt().coerceIn(0, bitmap.height - 1)
+    val bottom = bounds.bottom.toInt().coerceIn(top + 1, bitmap.height)
+    var dark = 0
+    for (y in top until bottom) {
+      for (x in left until right) {
+        val pixel = bitmap.getPixel(x, y)
+        val luminance = 0.2126 * ((pixel shr 16) and 0xFF) + 0.7152 * ((pixel shr 8) and 0xFF) + 0.0722 * (pixel and 0xFF)
+        if (luminance < DarkPixelLimit) dark++
+      }
+    }
+    return dark
+  }
+
+  private fun screencapBytes(): ByteArray {
+    val process = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("screencap -p")
+    return FileInputStream(process.fileDescriptor).use { it.readBytes() }.also { process.close() }
   }
 
   /** Turns the display and waits for the app to be built for the new shape. */
@@ -374,6 +411,14 @@ class FridgeWorkflowTest {
     composeRule.onNode(hasClickAction() and hasAnyDescendant(hasText("Add")), useUnmergedTree = true)
 
   private fun nodeCount(text: String): Int = composeRule.onAllNodes(hasText(text)).fetchSemanticsNodes().size
+
+  private companion object {
+    /** A glyph stroke well under this, and anything brighter than this is not ink. */
+    const val MinimumGlyphPixels = 40
+    const val DarkPixelLimit = 120
+    /** Rounding slack, because bounds are measured in pixels and land on halves. */
+    const val HalfPixel = 0.5f
+  }
 
   private fun awaitImeTop(): Float {
     val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
