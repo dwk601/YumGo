@@ -276,12 +276,14 @@ private fun FridgeScaffold(
 
 @Composable
 private fun FridgeHeader(state: FridgeUiState, useSoon: Int, callbacks: FridgeCallbacks) {
+  // The status bar, a cutout and the navigation bar all take a strip off the top or a side when
+  // the phone is held sideways, and 3-button navigation puts its bar on the left or the right, so
+  // the header keeps the horizontal ones too. In portrait they are all zero, so nothing moves.
   val headerInsets =
     WindowInsets.statusBars
       .union(WindowInsets.displayCutout)
       .union(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
       .exclude(WindowInsets.ime)
-      .exclude(WindowInsets.navigationBars)
   val subtitle =
     when {
       state.items.isEmpty() -> stringResource(R.string.fridge_subtitle_empty)

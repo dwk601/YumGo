@@ -8,6 +8,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityWindowInfo
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
@@ -20,6 +21,7 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -438,6 +440,163 @@ class FridgeWorkflowTest {
       deviceSetting("system", "user_rotation", rotation)
       deviceSetting("system", "accelerometer_rotation", autoRotate)
     }
+  }
+
+  /**
+   * Landscape with 3-button navigation puts the bar on the left or the right, and every control the
+   * fridge screen offers has to stay clear of it and take a tap. Both ways round are checked,
+   * because the bar is on a different side in each: held at 90 degrees it is where the Settings
+   * button and the Add button sit, at 270 where the title and the Search field start.
+   */
+  @Test
+  fun landscapeWithAButtonBar_keepsTheFridgeControlsClearOfItAndTappable() {
+    val navMode = deviceSetting("secure", "navigation_mode")
+    val autoRotate = deviceSetting("system", "accelerometer_rotation")
+    val rotation = deviceSetting("system", "user_rotation")
+    try {
+      deviceSetting("system", "accelerometer_rotation", "0")
+      buttonNavigation()
+
+      // Portrait first, where the bar is along the bottom and takes nothing off the sides.
+      rotateDisplay(0)
+      composeRule.waitUntil(20_000) { orientation() == ORIENTATION_PORTRAIT }
+      composeRule.waitForIdle()
+      assertFridgeControlsClearOfTheButtonBar(0)
+
+      for (held in listOf(1, 3)) {
+        rotateDisplay(held)
+        composeRule.waitUntil(20_000) { orientation() == ORIENTATION_LANDSCAPE }
+        composeRule.waitForIdle()
+        assertFridgeControlsClearOfTheButtonBar(held)
+
+        // A real finger at each control in turn, not a semantic click: a control under the bar
+        // cannot take one, and the bar would get the tap instead. Nothing here presses Back, which
+        // in landscape can leave the app rather than the screen, so every step is a tap or a drag
+        // that the screen itself answers.
+        tapForReal(composeRule.onNodeWithContentDescription("Settings").fetchSemanticsNode(), "Settings")
+        composeRule.waitUntil(15_000) { nodeCount("Settings") > 0 }
+        tapForReal(composeRule.onNodeWithContentDescription("Back").fetchSemanticsNode(), "Back")
+        composeRule.waitUntil(15_000) { nodeCount("Fridge") > 0 }
+
+        tapForReal(composeRule.onNode(hasSetTextAction() and hasText("Search")).fetchSemanticsNode(), "Search")
+        composeRule.waitUntil(10_000) {
+          composeRule
+            .onAllNodes(hasSetTextAction() and hasText("Search") and isFocused())
+            .fetchSemanticsNodes()
+            .isNotEmpty()
+        }
+
+        // The Add button is the one the keyboard would cover, and it has to be under it and not
+        // under the bar. Its tap opens the editor, which a drag on its header puts away again.
+        tapForReal(addButton().fetchSemanticsNode(), "Add")
+        composeRule.waitUntil(15_000) { nodeCount("Add to the fridge") > 0 }
+        throwSheetAway()
+        composeRule.waitUntil(15_000) { nodeCount("Fridge") > 0 }
+      }
+    } finally {
+      restoreNavigationMode(navMode)
+      deviceSetting("system", "user_rotation", rotation)
+      deviceSetting("system", "accelerometer_rotation", autoRotate)
+      closeKeyboard()
+    }
+  }
+
+  /**
+   * The bar is on screen, and the title, the Search field, the Settings button and the Add button
+   * are all outside it. Nothing here is padded by hand: the bar's own rect is the measure, so the
+   * check holds for a cutout or a taller bar as well.
+   */
+  private fun assertFridgeControlsClearOfTheButtonBar(held: Int) {
+    val bar = navigationBarBounds()
+    assertNotNull("The button bar is not a window with the phone held at $held degrees", bar)
+    val barWidth = bar!!.width()
+    val barHeight = bar.height()
+    val controls =
+      listOf(
+        "Fridge" to composeRule.onNodeWithText("Fridge"),
+        "Search" to composeRule.onNode(hasSetTextAction() and hasText("Search")),
+        "Settings" to composeRule.onNodeWithContentDescription("Settings"),
+        "Add" to addButton(),
+      )
+    controls.forEach { (what, node) ->
+      val bounds = screenRect(node.fetchSemanticsNode())
+      val under =
+        bounds.left < bar.left + barWidth &&
+          bounds.right > bar.left &&
+          bounds.top < bar.top + barHeight &&
+          bounds.bottom > bar.top
+      assertTrue("$what is $bounds and runs under the button bar $bar at $held degrees", !under)
+      node.assertIsDisplayed()
+    }
+  }
+
+  /**
+   * Throws the editor sheet away with the drag its own handle is for, rather than with Back: on a
+   * landscape screen Back can leave the app instead of the sheet, and this test still has the rest
+   * of the screen to look at.
+   */
+  private fun throwSheetAway() {
+    val title = screenRect(composeRule.onNodeWithText("Add to the fridge").fetchSemanticsNode())
+    val x = (title.left + title.right) / 2
+    shell("input swipe $x ${title.top + title.height() / 2} $x ${title.top + 800}")
+    Thread.sleep(500)
+  }
+
+  /** A real tap where the control is drawn, so one under the bar cannot pass on a click action. */
+  private fun tapForReal(node: SemanticsNode, what: String) {
+    val bounds = screenRect(node)
+    val x = ((bounds.left + bounds.right) / 2).toInt()
+    val y = ((bounds.top + bounds.bottom) / 2).toInt()
+    shell("input tap $x $y")
+    Thread.sleep(300)
+  }
+
+  private fun screenRect(node: SemanticsNode): Rect {
+    val x = node.positionOnScreen.x
+    val y = node.positionOnScreen.y
+    return Rect(x.toInt(), y.toInt(), (x + node.size.width).toInt(), (y + node.size.height).toInt())
+  }
+
+  /**
+   * The system navigation bar's own frame, as the window manager reports it. The bar is a system
+   * window the app never sees, so its rect has to come from the platform rather than from the
+   * semantics tree, and a null here means the bar is not really on screen: a test that cannot find
+   * it has checked nothing.
+   */
+  private fun navigationBarBounds(): Rect? {
+    val frame =
+      Regex("type=navigationBars frame=\\[(-?\\d+),(-?\\d+)\\]\\[(-?\\d+),(-?\\d+)\\] visible=true")
+        .find(shell("dumpsys window displays")) ?: return null
+    val (left, top, right, bottom) = frame.destructured
+    val bounds = Rect(left.toInt(), top.toInt(), right.toInt(), bottom.toInt())
+    return if (bounds.width() > 0 && bounds.height() > 0) bounds else null
+  }
+
+  /** Switches to 3-button navigation, the shape that puts a bar on a side when the phone is held sideways. */
+  private fun buttonNavigation() {
+    shell("cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.threebutton")
+    composeRule.waitUntil(30_000) { deviceSetting("secure", "navigation_mode").trim() == "0" }
+  }
+
+  private fun restoreNavigationMode(mode: String) {
+    val overlay =
+      when (mode.trim()) {
+        "0" -> "com.android.internal.systemui.navbar.threebutton"
+        "1" -> "com.android.internal.systemui.navbar.twobutton"
+        else -> "com.android.internal.systemui.navbar.gestural"
+      }
+    shell("cmd overlay enable-exclusive --category $overlay")
+    composeRule.waitUntil(30_000) { deviceSetting("secure", "navigation_mode").trim() == mode.trim() }
+  }
+
+  /**
+   * Puts the keyboard away, but only when it is up: a Back with no keyboard behind it would leave
+   * the app, and the app is this test's measuring device for the insets around it.
+   */
+  private fun closeKeyboard() {
+    if (imeTopOrNull() == null) return
+    shell("input keyevent 4")
+    composeRule.waitUntil(10_000) { imeTopOrNull() == null }
   }
 
   /**
