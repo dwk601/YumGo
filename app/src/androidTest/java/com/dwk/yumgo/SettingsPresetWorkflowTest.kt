@@ -2,11 +2,16 @@ package com.dwk.yumgo
 
 import android.database.sqlite.SQLiteDatabase
 import android.content.Context
+import android.content.res.Configuration.ORIENTATION_LANDSCAPE
+import android.content.res.Configuration.ORIENTATION_PORTRAIT
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.core.view.WindowCompat
@@ -27,6 +32,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.dwk.yumgo.data.FoodPreset
 import com.dwk.yumgo.data.SettingsServices
 import com.dwk.yumgo.data.ThemeMode
 import java.io.FileInputStream
@@ -47,6 +53,12 @@ import org.junit.rules.RuleChain
 import org.junit.rules.TestRule
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
+
+/** The first preset in the list, which sits high up in a long list. */
+private const val TopPreset = "Milk"
+
+/** The last preset in the list, which is the one the list runs out of room for. */
+private const val BottomPreset = "Frozen peas"
 
 /**
  * Premade foods, the settings screen, and the palette, on the real app.
@@ -302,6 +314,133 @@ class SettingsPresetWorkflowTest {
   }
 
   /**
+   * Editing a preset with the keyboard up: the field being typed into and the button that saves
+   * the edit both have to be whole, above the keyboard, and reachable with a finger. Tapping where
+   * Save is drawn used to land on the keyboard instead, which deleted a digit instead of saving.
+   */
+  @Test
+  fun presetEditorWithTheKeyboard_keepsTheDaysFieldAndSaveReachable() {
+    openSettings()
+    openPreset(TopPreset)
+    // Tap the Days field the way a person does, with a finger: that is what raises the keyboard.
+    fingerTapOnField("Days")
+    val imeTop = awaitImeTop()
+    composeRule.onNode(hasSetTextAction() and hasText("Days")).performTextReplacement("9")
+
+    assertFieldAndSaveAreReachable("Days", imeTop)
+
+    // A finger on Save saves, rather than hitting the keyboard.
+    saveWithAFinger()
+    eventually {
+      assertEquals("Milk is still ${storedPreset("milk")?.expiryDays} days", 9, storedPreset("milk")?.expiryDays)
+      composeRule.onNodeWithText("9 days").assertIsDisplayed()
+    }
+    // Put the keyboard away again, so the next test starts from a quiet screen.
+    dismissKeyboardIfUp()
+  }
+
+  /**
+   * The editor of a preset at the end of the list is the one that used to open with its fields and
+   * its Save below the bottom of the screen, so a person had to scroll by hand before they could
+   * even put a finger in a field. Nothing is scrolled here after the tap: the card brings itself
+   * into view once it has finished growing, and then a finger types and a finger saves.
+   */
+  @Test
+  fun presetEditorAtTheEndOfTheList_opensInViewAndSavesWithAFinger() {
+    openSettings()
+    openPreset(BottomPreset)
+    // Whatever the app does on its own, the whole editor has to end up on screen.
+    eventually { assertEditorInView() }
+
+    fingerTapOnField("Name")
+    val imeTop = awaitImeTop()
+    assertFieldAndSaveAreReachable("Name", imeTop)
+
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextReplacement("Ratatouille")
+    saveWithAFinger()
+    eventually {
+      assertEquals("The rename did not reach the preset", "Ratatouille", storedPreset("frozen_peas")?.name)
+      composeRule.onNodeWithText("Ratatouille").assertIsDisplayed()
+      composeRule.onNodeWithText("120 days").assertIsDisplayed()
+    }
+    dismissKeyboardIfUp()
+  }
+
+  /**
+   * Landscape with the keyboard up is the shape that hid the field being typed into behind the
+   * title: the list reached up under the app bar, so scrolling a card into view counted the space
+   * behind the bar as room on screen. Turned on its side, the field stays below the bar, it and
+   * Save both stay above the keyboard, and a finger on Save saves. The display is turned back.
+   */
+  @Test
+  fun presetEditorInLandscape_keepsTheFieldBelowTheAppBarAndSaveAboveTheKeyboard() {
+    val autoRotate = deviceSetting("system", "accelerometer_rotation")
+    val rotation = deviceSetting("system", "user_rotation")
+    try {
+      deviceSetting("system", "accelerometer_rotation", "0")
+      openSettings()
+
+      // Turned on its side first, which is the shape a person edits a preset in: the window is
+      // short and the keyboard takes half of what is left.
+      rotateDisplay(1)
+      composeRule.waitUntil(20_000) { orientation() == ORIENTATION_LANDSCAPE }
+      assertEquals("The app did not follow the display", ORIENTATION_LANDSCAPE, orientation())
+
+      openPreset(BottomPreset)
+      eventually { assertEditorInView() }
+
+      fingerTapOnField("Days")
+      val imeTop = awaitImeTop()
+      assertFieldAndSaveAreReachable("Days", imeTop)
+
+      composeRule.onNode(hasSetTextAction() and hasText("Days")).performTextReplacement("30")
+      saveWithAFinger()
+      eventually {
+        assertEquals("The shelf life did not change", 30, storedPreset("frozen_peas")?.expiryDays)
+        composeRule.onNodeWithText("30 days").assertIsDisplayed()
+      }
+
+      rotateDisplay(0)
+      composeRule.waitUntil(20_000) { orientation() == ORIENTATION_PORTRAIT }
+    } finally {
+      dismissKeyboardIfUp()
+      deviceSetting("system", "user_rotation", rotation)
+      deviceSetting("system", "accelerometer_rotation", autoRotate)
+    }
+  }
+
+  /**
+   * At twice the text size the editor is taller than the room the keyboard leaves, which is where
+   * the fields used to end up under it. The field, Save and a finger on Save, all at that size.
+   */
+  @Test
+  fun presetEditorAtDoubleTextSize_keepsTheFieldAndSaveReachable() {
+    val fontScale = deviceSetting("system", "font_scale")
+    try {
+      deviceSetting("system", "font_scale", "2.0")
+      recreateActivity()
+      composeRule.waitUntil(20_000) { nodeCount("Fridge") > 0 }
+
+      openSettings()
+      openPreset(TopPreset)
+      fingerTapOnField("Days")
+      val imeTop = awaitImeTop()
+      assertFieldAndSaveAreReachable("Days", imeTop)
+
+      composeRule.onNode(hasSetTextAction() and hasText("Days")).performTextReplacement("12")
+      saveWithAFinger()
+      eventually {
+        assertEquals("Milk is still ${storedPreset("milk")?.expiryDays} days", 12, storedPreset("milk")?.expiryDays)
+        composeRule.onNodeWithText("12 days").assertIsDisplayed()
+      }
+    } finally {
+      dismissKeyboardIfUp()
+      deviceSetting("system", "font_scale", fontScale)
+      recreateActivity()
+    }
+  }
+
+  /**
    * Settings with the system back gesture, seen as a person sees it: the screen that is on top, the
    * frame part way through the gesture, and the fridge underneath once the gesture finishes.
    */
@@ -377,6 +516,181 @@ class SettingsPresetWorkflowTest {
     shell("settings put global window_animation_scale $value")
     Thread.sleep(300)
     composeRule.waitForIdle()
+  }
+
+  /** A real finger on a node, in the place the node is drawn. */
+  private fun tapOnScreen(node: SemanticsNode) {
+    val x = (node.positionOnScreen.x + node.size.width / 2f).toInt()
+    val y = (node.positionOnScreen.y + node.size.height / 2f).toInt()
+    shell("input tap $x $y")
+    composeRule.waitForIdle()
+  }
+
+  /** A real finger on the editor field with this label, which is what raises the keyboard. */
+  private fun fingerTapOnField(label: String) {
+    awaitEditorSettled()
+    tapOnScreen(composeRule.onNode(hasSetTextAction() and hasText(label)).fetchSemanticsNode())
+  }
+
+  /** A real finger on Save, where it is drawn. */
+  private fun saveWithAFinger() {
+    awaitEditorSettled()
+    tapOnScreen(composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().fetchSemanticsNode())
+  }
+
+  /**
+   * Waits until the editor has stopped moving. Opening one scrolls the card into view with an
+   * animation, and a finger taken mid-scroll, or a reading taken then, says what happened to be
+   * passing by rather than where the editor came to rest. A person waits for the screen to hold
+   * still, so the test does too.
+   */
+  private fun awaitEditorSettled() {
+    var previous: List<Rect> = emptyList()
+    var still = 0
+    val deadline = System.currentTimeMillis() + 20_000
+    while (still < 3 && System.currentTimeMillis() < deadline) {
+      Thread.sleep(100)
+      composeRule.waitForIdle()
+      val now = listOf("Name", "Days", "Save").map { drawnWhere(it) }
+      still = if (now == previous) still + 1 else 0
+      previous = now
+    }
+  }
+
+  /** Where a part of the open editor is drawn right now: an editor field by its label, or Save. */
+  private fun drawnWhere(part: String): Rect =
+    if (part == "Save") {
+      composeRule.onNodeWithText("Save").fetchSemanticsNode().boundsInWindow
+    } else {
+      composeRule.onNode(hasSetTextAction() and hasText(part)).fetchSemanticsNode().boundsInWindow
+    }
+
+  /**
+   * What a person has to be able to see and reach, in the shape that used to lose it: the field
+   * they are typing into is whole, sits inside the part of the list that is on screen (which
+   * starts below the app bar, so a field cannot be parked behind the title), and both it and the
+   * button that saves it are above the keyboard.
+   */
+  private fun assertFieldAndSaveAreReachable(label: String, imeTop: Float) {
+    awaitEditorSettled()
+    val viewport = listViewport()
+    val field = composeRule.onNode(hasSetTextAction() and hasText(label)).assertIsDisplayed().fetchSemanticsNode()
+    val bounds = field.boundsInWindow
+    assertEquals(
+      "The $label field is clipped to $bounds of ${field.size}",
+      field.size.height.toFloat(),
+      bounds.height,
+      HalfPixel,
+    )
+    assertTrue(
+      "The $label field is above the top of the list on screen: $bounds against $viewport",
+      bounds.top >= viewport.top - HalfPixel,
+    )
+    assertTrue(
+      "The $label field is behind the keyboard: $bounds against $imeTop",
+      bounds.bottom <= imeTop + HalfPixel,
+    )
+
+    val save = composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().fetchSemanticsNode()
+    val saveBounds = save.boundsInWindow
+    assertTrue(
+      "Save is behind the keyboard: $saveBounds against $imeTop",
+      saveBounds.bottom <= imeTop + HalfPixel,
+    )
+    assertTrue(
+      "Save is above the top of the list on screen: $saveBounds against $viewport",
+      saveBounds.top >= viewport.top - HalfPixel,
+    )
+  }
+
+  /**
+   * The whole open editor, on screen, without anything having scrolled it: both fields and the
+   * Save row inside the part of the list a person can see.
+   */
+  private fun assertEditorInView() {
+    awaitEditorSettled()
+    val viewport = listViewport()
+    listOf("Name", "Days").forEach { label ->
+      val bounds = composeRule.onNode(hasSetTextAction() and hasText(label)).fetchSemanticsNode().boundsInWindow
+      assertTrue(
+        "The $label field is above the list on screen: $bounds against $viewport",
+        bounds.top >= viewport.top - HalfPixel,
+      )
+      assertTrue(
+        "The $label field is below the list on screen: $bounds against $viewport",
+        bounds.bottom <= viewport.bottom + HalfPixel,
+      )
+    }
+    val save = composeRule.onNodeWithText("Save").fetchSemanticsNode().boundsInWindow
+    assertTrue("Save is above the list on screen: $save against $viewport", save.top >= viewport.top - HalfPixel)
+    assertTrue("Save is below the list on screen: $save against $viewport", save.bottom <= viewport.bottom + HalfPixel)
+  }
+
+  /**
+   * The part of the settings list a person can see. It is the list's own bounds rather than the
+   * screen's, so a field the list has scrolled up under the app bar fails the check.
+   */
+  private fun listViewport(): Rect = composeRule.onNode(hasScrollToNodeAction()).fetchSemanticsNode().boundsInWindow
+
+  /**
+   * Opens a preset's editor the way a person does, from a row in the list, and leaves it open if
+   * the screen already has it open: a turned display rebuilds the screen around the same draft.
+   */
+  private fun openPreset(name: String) {
+    eventually {
+      if (nodeCount("Save") == 0) {
+        scrollSettingsTo(hasText(name))
+        tapControl(composeRule.onNodeWithText(name))
+      }
+      composeRule.onNode(hasSetTextAction() and hasText("Name")).assertExists()
+    }
+  }
+
+  /** The preset as it is stored now, read without waiting, so a missing save fails instead of hanging. */
+  private fun storedPreset(id: String): FoodPreset? =
+    SettingsServices.presets(appContext()).presets.value.firstOrNull { it.id == id }
+
+  /** Puts the keyboard away, so the next test starts from a quiet screen. */
+  private fun dismissKeyboardIfUp() {
+    if (imeTop(InstrumentationRegistry.getInstrumentation().uiAutomation) == null) return
+    shell("input keyevent 4")
+    composeRule.waitForIdle()
+  }
+
+  /** Turns the display, the way a person does, and lets the app be built for the new shape. */
+  private fun rotateDisplay(rotation: Int) {
+    deviceSetting("system", "user_rotation", rotation.toString())
+    composeRule.waitForIdle()
+  }
+
+  private fun orientation(): Int? = runCatching { composeRule.activity.resources.configuration.orientation }.getOrNull()
+
+  private fun deviceSetting(namespace: String, key: String): String = shell("settings get $namespace $key").trim()
+
+  private fun deviceSetting(namespace: String, key: String, value: String) {
+    shell("settings put $namespace $key $value")
+    Thread.sleep(500)
+  }
+
+  /** Where the keyboard starts, once it is up. */
+  private fun awaitImeTop(): Float {
+    val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+    val deadline = System.currentTimeMillis() + 20_000
+    while (System.currentTimeMillis() < deadline) {
+      val top = imeTop(automation)
+      if (top != null) return top
+      Thread.sleep(250)
+      composeRule.waitForIdle()
+    }
+    throw AssertionError("The keyboard never came up")
+  }
+
+  private fun imeTop(automation: android.app.UiAutomation): Float? {
+    val window = automation.windows.firstOrNull { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+      ?: return null
+    val bounds = android.graphics.Rect()
+    window.getBoundsInScreen(bounds)
+    return if (bounds.height() > 0) bounds.top.toFloat() else null
   }
 
   private fun appContext(): Context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -704,6 +1018,11 @@ class SettingsPresetWorkflowTest {
    * Reads the real frame and calls it light or dark by its mean brightness, which is what a person
    * would say looking at it.
    */
+  private companion object {
+    /** Rounding slack, because bounds are measured in pixels and land on halves. */
+    const val HalfPixel = 0.5f
+  }
+
   private fun screenIsDark(): Boolean {
     val bitmap = frame()
     var total = 0.0
