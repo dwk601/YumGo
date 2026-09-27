@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -135,11 +136,14 @@ fun ItemEditor(
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   val compact = compactEditor()
-  // Material keeps the navigation bar out of the sheet's content and paints its own colour into the
-  // gap it leaves, which is where the buttons are drawn. The content is given that gap back, and the
-  // room goes to the editor body as padding, so the band lands on the bar and the editor is laid out
-  // in exactly the space it had before.
+  // Material keeps the bar out of the sheet's content and paints its own colour into the gap it
+  // leaves, which is where the buttons are drawn. The content is given the bar's room back, and the
+  // room goes to the editor body as padding, so the band lands on the bar. The keyboard has the
+  // bar's room while it is up: nothing is padded for the bar then, and the band has nothing to do.
+  val keyboardUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
   val barRoom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+  val roomForTheBar =
+    if (keyboardUp) WindowInsets(0) else WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)
   if (restored) {
     RestoredEditor(
       draft = draft,
@@ -159,14 +163,16 @@ fun ItemEditor(
       containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
       contentColor = MaterialTheme.colorScheme.onSurface,
       dragHandle = { SheetHeader(draft, compact) },
-      contentWindowInsets = { WindowInsets(0) },
+      // Material's own room for the status bar stays; the bar's room goes to the editor body, so the
+      // band has the bar's edge to be drawn on.
+      contentWindowInsets = { BottomSheetDefaults.windowInsets.only(WindowInsetsSides.Top) },
     ) {
       // The sheet is a window of its own and the buttons are drawn on it, so the band is composed in
       // this window. It is on the bar's edge only where the sheet reaches it, which is along the
       // bottom: turned sideways the sheet is narrower than the screen, and the activity's own band is
       // already where the buttons are.
       Box(Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.navigationBars)) {
+        Box(Modifier.fillMaxWidth().windowInsetsPadding(roomForTheBar)) {
           EditorBody(
             draft = draft,
             callbacks = callbacks,
@@ -176,7 +182,7 @@ fun ItemEditor(
             sheetState = sheetState,
           )
         }
-        NavigationBarBand(reachesTheScreenEdge = barRoom > 0.dp)
+        NavigationBarBand(reachesTheScreenEdge = !keyboardUp && barRoom > 0.dp)
       }
     }
   }

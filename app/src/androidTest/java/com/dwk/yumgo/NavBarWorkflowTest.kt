@@ -5,10 +5,10 @@ import android.graphics.BitmapFactory
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -49,7 +49,8 @@ import org.junit.runner.RunWith
  *
  * The navigation mode, the device's night setting and its rotation belong to the device, and all
  * three are put back the way they were found.
- */@RunWith(AndroidJUnit4::class)
+ */
+@RunWith(AndroidJUnit4::class)
 class NavBarWorkflowTest {
   @get:Rule val composeRule = createAndroidComposeRule<MainActivity>()
 
@@ -149,7 +150,7 @@ class NavBarWorkflowTest {
   }
 
   /**
-   * The add sheet is a window of its own and draws over the activity's, so the band has to be in
+   * The add sheet is a window of its own and the buttons are drawn on it, so the band has to be in
    * that window too. Adding an item is the main flow, and the keyboard is not always up: a person
    * puts it away to look at what they typed, and the bar is then the app's last word.
    */
@@ -158,6 +159,54 @@ class NavBarWorkflowTest {
     setDeviceNightMode(true)
     openTheAddSheetWithoutTheKeyboard()
     assertButtonsAreReadable("the add sheet, a light app on a dark device")
+    closeTheAddSheet()
+
+    // The other way round: a dark app on a light device, where the device's buttons are dark.
+    chooseTheDarkPalette()
+    setDeviceNightMode(false)
+    openTheAddSheetWithoutTheKeyboard()
+    assertButtonsAreReadable("the add sheet, a dark app on a light device")
+    closeTheAddSheet()
+  }
+
+  /**
+   * The keyboard has the bar's room while it is up, so the sheet's own paper runs down to it. A band
+   * in that room is a stripe between the editor and the keyboard, and an empty gap is a hole in the
+   * sheet, and both are worse than the plain surface that is there now.
+   */
+  @Test
+  fun theAddSheet_hasNoStripeAboveTheKeyboard() {
+    setDeviceNightMode(true)
+    openTheAddSheetWithTheKeyboard()
+    assertNothingIsPaintedAboveTheKeyboard("a light app on a dark device")
+    closeTheAddSheet()
+  }
+
+  /**
+   * The sheet is narrower than the screen with the phone turned, so the app is dimmed around it
+   * rather than covered: what is beside the sheet is the fridge under the sheet's scrim, and the
+   * sheet's own header is clear of the status bar.
+   */
+  @Test
+  fun theAddSheetInLandscape_dimsTheAppAndClearsTheStatusBar() {
+    setDeviceNightMode(true)
+    val paperBefore = cornerColour()
+    rotateTo(1)
+    openTheAddSheetWithoutTheKeyboard()
+
+    eventually("the app beside the sheet is not the dimmed fridge") {
+      val now = cornerColour()
+      val distance = colourDistance(now, paperBefore)
+      val luminance = luminance(now)
+      when {
+        luminance >= luminance(paperBefore) ->
+          "the app beside the sheet is ${hex(now)}, which is no dimmer than the paper at " +
+            "${hex(paperBefore)}: the sheet has covered it"
+        distance <= PAPER_TOLERANCE -> "the app beside the sheet is untouched paper at ${hex(now)}"
+        else -> null
+      }
+    }
+    assertTheSheetHeaderClearsTheStatusBar("with the bar on the right")
     closeTheAddSheet()
   }
 
@@ -178,26 +227,35 @@ class NavBarWorkflowTest {
 
   /** The sheet as a person leaves it: opened, with the keyboard put away again. */
   private fun openTheAddSheetWithoutTheKeyboard() {
-    eventually("The add sheet never opened") {
-      // The semantics action, not a tap: the add sheet moves insets around, and a real tap waits
-      // for the app to settle, which it does not do while the sheet is opening.
-      runCatching { composeRule.onNodeWithContentDescription("Add").performSemanticsAction(SemanticsActions.OnClick) }
-      if (composeRule.onAllNodesWithText("Add to the fridge").fetchSemanticsNodes().isEmpty()) {
-        "The add sheet never opened"
-      } else {
-        null
-      }
-    }
+    openTheAddSheet()
     // The first Back puts the keyboard away and leaves the sheet up, the second closes the sheet.
     navBarShell("input keyevent 4")
     eventually("The keyboard never went away") {
       if (isKeyboardUp()) "The keyboard is still over the sheet" else null
     }
-    assertTrue(
-      "Putting the keyboard away closed the sheet",
-      composeRule.onAllNodesWithText("Add to the fridge").fetchSemanticsNodes().isNotEmpty(),
-    )
+    assertTrue("Putting the keyboard away closed the sheet", theAddSheetIsOpen())
   }
+
+  private fun openTheAddSheetWithTheKeyboard() {
+    openTheAddSheet()
+    // A tap on the name field is how a person brings the keyboard up over the sheet.
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performSemanticsAction(SemanticsActions.OnClick)
+    eventually("The keyboard never came up with the sheet") {
+      if (isKeyboardUp()) null else "The keyboard is still down"
+    }
+  }
+
+  private fun openTheAddSheet() {
+    eventually("The add sheet never opened") {
+      // The semantics action, not a tap: the add sheet moves insets around, and a real tap waits
+      // for the app to settle, which it does not do while the sheet is opening.
+      runCatching { composeRule.onNodeWithContentDescription("Add").performSemanticsAction(SemanticsActions.OnClick) }
+      if (theAddSheetIsOpen()) null else "The add sheet never opened"
+    }
+  }
+
+  private fun theAddSheetIsOpen(): Boolean =
+    composeRule.onAllNodesWithText("Add to the fridge").fetchSemanticsNodes().isNotEmpty()
 
   private fun isKeyboardUp(): Boolean {
     var up = false
@@ -208,15 +266,79 @@ class NavBarWorkflowTest {
     return up
   }
 
-  /** Puts the sheet away, so the test that follows starts on the fridge. */
-  private fun closeTheAddSheet() {
-    navBarShell("input keyevent 4")
-    eventually("The sheet never closed") {
-      if (composeRule.onAllNodesWithText("Add to the fridge").fetchSemanticsNodes().isEmpty()) {
-        null
+  /**
+   * The room between the sheet's content and the keyboard, which is the sheet's own paper and
+   * nothing else. Compared with the sheet's own surface, so it says nothing about a palette.
+   */
+  private fun assertNothingIsPaintedAboveTheKeyboard(what: String) {
+    eventually("$what: something is painted above the keyboard") {
+      val keyboardTop = keyboardTop()
+      if (keyboardTop <= 0) return@eventually "$what: there is no keyboard on the screen"
+      val frame = frame()
+      val room = band(frame, keyboardTop - STRIP, keyboardTop, 0, frame.width)
+      val surface = sheetSurface(frame)
+      val distance = colourDistance(dominant(room), surface)
+      if (distance > PAPER_TOLERANCE) {
+        "$what: the ${STRIP}px above the keyboard is ${hex(dominant(room))} against the sheet's own " +
+          "${hex(surface)}, $distance apart, so there is a stripe or a hole there"
       } else {
-        "The sheet is still open"
+        null
       }
+    }
+  }
+
+  /** The sheet's own surface, read from the middle of the sheet, well clear of any of its rows. */
+  private fun sheetSurface(frame: Bitmap): Int {
+    val top = frame.height / 2
+    val row = band(frame, top, top + STRIP, 0, frame.width)
+    return dominant(row)
+  }
+
+  /** Where the keyboard starts, in pixels from the top of the screen. */
+  private fun keyboardTop(): Int {
+    var bottom = 0
+    onMainThread {
+      val insets = ViewCompat.getRootWindowInsets(composeRule.activity.window.decorView)
+      bottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+    }
+    return frame().height - bottom
+  }
+
+  /** The app's own paper where the sheet does not reach, at the top left of the screen. */
+  private fun cornerColour(): Int {
+    val frame = frame()
+    return dominant(band(frame, 0, CORNER, 0, CORNER))
+  }
+
+  /** The sheet's title has to sit below the status bar, which is the top bar the phone draws. */
+  private fun assertTheSheetHeaderClearsTheStatusBar(what: String) {
+    eventually("$what: the sheet's header is under the status bar") {
+      val top =
+        runCatching { composeRule.onAllNodesWithText("Add to the fridge").fetchSemanticsNodes().firstOrNull()?.boundsInRoot?.top }
+          .getOrNull()
+          ?: return@eventually "$what: the sheet has no header on the screen"
+      val statusBar = statusBarInset()
+      if (top < statusBar) "$what: the sheet's header starts at $top, under the status bar at $statusBar" else null
+    }
+  }
+
+  private fun statusBarInset(): Int {
+    var inset = 0
+    onMainThread {
+      val insets = ViewCompat.getRootWindowInsets(composeRule.activity.window.decorView)
+      inset = insets?.getInsets(WindowInsetsCompat.Type.statusBars())?.top ?: 0
+    }
+    return inset
+  }
+
+  /**
+   * Puts the sheet away, so the test that follows starts on the fridge. The keyboard goes first, so
+   * it takes two Backs when the sheet opened with the keyboard up.
+   */
+  private fun closeTheAddSheet() {
+    eventually("The sheet never closed") {
+      runCatching { navBarShell("input keyevent 4") }
+      if (theAddSheetIsOpen()) "The sheet is still open" else null
     }
   }
 
@@ -614,5 +736,9 @@ class NavBarWorkflowTest {
 
     /** The strip read for the app's paper, above the bar and clear of the button on the right. */
     const val PAPER_BAND = 48
+
+    /** The room above the keyboard, and the corner the sheet does not reach, read in pixels. */
+    const val STRIP = 40
+    const val CORNER = 90
   }
 }
