@@ -113,16 +113,20 @@ class FridgeContentWorkflowTest {
       onRemovePhoto = { events += "remove-photo" },
       // The rule the app keeps: a shortcut fills what the user has not decided, and leaves alone
       // what they have. Only the editor's part of it is under test here.
+      // The rule the app keeps: a shortcut fills what the user has not decided, finishes a name they
+      // have only started, and leaves alone a name they typed whole.
       onPresetSelected = { preset ->
         events += "preset:${preset.name}"
         val draft = state.draft
         if (draft != null) {
           val today = LocalDate.now().toEpochDay()
+          val typed = draft.name.trim()
+          val keepName = typed.isNotEmpty() && !preset.completes(typed)
           state =
             state.copy(
               draft =
                 draft.copy(
-                  name = draft.name.ifBlank { preset.name },
+                  name = if (keepName) draft.name else preset.name,
                   expiryEpochDay = draft.expiryEpochDay ?: (today + preset.expiryDays),
                   presetId = preset.id,
                 ),
@@ -220,12 +224,19 @@ class FridgeContentWorkflowTest {
 
   /**
    * The shortcuts used to go away on the first keystroke, which moved the sheet under the user's
-   * finger. The lane stays, and it stays the size it was, whether or not anything matches what has
-   * been typed, and the photo section and Save are both still above the keyboard.
+   * finger, and the row that replaced them sat in the sheet's own drag-handle slot, where a tap a
+   * few pixels off a chip closed the sheet and threw the draft away. The lane stays the size it
+   * is, a tap that misses a chip does nothing at all, and the photo section and Save are both
+   * still above the keyboard.
    */
   @Test
-  fun presetRow_keepsItsPlaceOnTheFirstKeystroke() {
-    presets = listOf(FoodPreset("milk", "Milk", 7), FoodPreset("eggs", "Eggs", 14))
+  fun presetLane_keepsItsPlaceAndATapOnItDoesNotDismiss() {
+    presets =
+      listOf(
+        FoodPreset("milk", "Milk", 7),
+        FoodPreset("eggs", "Eggs", 14),
+        FoodPreset("salad_greens", "Salad greens", 5),
+      )
     state = state.copy(items = listOf(FridgeItemUi("leftovers", "Leftovers", 1, null, null)))
     addButton().performClick()
     rule.waitUntil(5_000) {
@@ -235,29 +246,93 @@ class FridgeContentWorkflowTest {
     // it, so it is settled before the first measurement is taken.
     val imeTop = awaitImeTop()
     val label = rule.onNodeWithText("Premade items").assertIsDisplayed().screenBounds()
+    val helper = rule.onNodeWithText("One tap fills the name and a date.").assertIsDisplayed().screenBounds()
+    val milk = rule.onNodeWithText("Milk").assertIsDisplayed().screenBounds()
     val quantity = rule.onNodeWithText("Quantity").assertIsDisplayed().screenBounds()
     val save = rule.onNodeWithText("Save").assertIsDisplayed().screenBounds()
 
-    // A keystroke that matches no shortcut is the one that used to collapse the row.
+    // A tap on the label, the handle row, or the space between chips used to close the sheet. The
+    // editor has to stay open and the draft has to stay in it.
+    shell("input tap ${label.center.x.toInt()} ${label.center.y.toInt()}")
+    rule.waitForIdle()
+    assertTrue("A tap on the label closed the editor: $events", "dismiss" !in events)
+    rule.onNodeWithText("Add to the fridge").assertIsDisplayed()
+    rule.onNode(hasSetTextAction() and hasText("Name")).assertExists()
+
+    // The first keystroke must not move anything, whether or not it matches a shortcut.
     rule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Z")
     rule.waitForIdle()
-    screenshot("preset-row-typed")
-
+    screenshot("preset-lane-typed")
     val labelAfter = rule.onNodeWithText("Premade items").assertIsDisplayed().screenBounds()
+    val helperAfter = rule.onNodeWithText("One tap fills the name and a date.").assertIsDisplayed().screenBounds()
+    val milkAfter = rule.onNodeWithText("Milk").assertIsDisplayed().screenBounds()
     val quantityAfter = rule.onNodeWithText("Quantity").assertIsDisplayed().screenBounds()
     val saveAfter = rule.onNodeWithText("Save").assertIsDisplayed().screenBounds()
-    assertEquals("The shortcuts row moved from $label to $labelAfter", label.top, labelAfter.top, HalfPixel)
-    assertEquals("The row lost its height: quantity went from $quantity to $quantityAfter", quantity.top, quantityAfter.top, HalfPixel)
+    assertEquals("The lane moved from $label to $labelAfter", label.top, labelAfter.top, HalfPixel)
+    assertEquals("The helper moved from $helper to $helperAfter", helper.top, helperAfter.top, HalfPixel)
+    assertEquals("The chip moved from $milk to $milkAfter", milk.top, milkAfter.top, HalfPixel)
+    assertEquals("The lane lost its height: quantity went from $quantity to $quantityAfter", quantity.top, quantityAfter.top, HalfPixel)
     assertEquals("The sheet jumped: Save went from $save to $saveAfter", save.top, saveAfter.top, HalfPixel)
-    // Nothing matches "Z", and the lane says so instead of emptying itself out of the sheet.
-    rule.onNodeWithText("No premade item starts with that.").assertIsDisplayed()
-    rule.onNodeWithText("Milk").assertDoesNotExist()
 
-    // Save is still above the keyboard, and so is the photo section below it.
+    // "Z" is not the start of a shortcut, so the lane leaves the whole list standing: narrowing it
+    // to chips a tap could not finish would promise something a tap does not keep.
+    rule.onNodeWithText("Milk").assertIsDisplayed()
+    rule.onNodeWithText("Salad greens", useUnmergedTree = true).assertExists()
+    // And the shortcut is still one tap, which is the whole reason it is there.
+    rule.onNodeWithText("Milk").performClick()
+    rule.waitForIdle()
+    assertTrue(events.toString(), "preset:Milk" in events)
+    assertEquals("A tap on a shortcut replaced a name the user typed", "Z", state.draft?.name)
+
+    // Save and the photo section are both above the keyboard.
     val saveNow = rule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().screenBounds()
     assertTrue("Save bottom ${saveNow.bottom} is under the keyboard top $imeTop", saveNow.bottom <= imeTop)
     val take = rule.onNodeWithText("Take photo").performScrollTo().assertIsDisplayed().screenBounds()
     assertTrue("Take photo bottom ${take.bottom} is under the keyboard top $imeTop", take.bottom <= imeTop)
+  }
+
+  /**
+   * A 320dp window at 200% text: the shortcut lane has to give the chips a line of their own. The
+   * label used to sit beside them and take most of the width, which left one chip sliced by the
+   * edge of the window: no use to a finger, and nothing to aim at.
+   */
+  @Test
+  fun narrowWindowAtLargeText_givesTheShortcutChipsAWholeLine() {
+    frameWidthDp = 320
+    frameFontScale = 2f
+    presets =
+      listOf(
+        FoodPreset("milk", "Milk", 7),
+        FoodPreset("ground_beef", "Ground beef", 3),
+        FoodPreset("salad_greens", "Salad greens", 5),
+      )
+    val draft = ItemDraft(null, "", 1, null, null)
+    state = state.copy(draft = draft)
+    screen = { ItemEditor(draft = draft, callbacks = callbacks, presets = presets, restored = true) }
+    rule.waitForIdle()
+
+    // The label and its line about what a tap does are above the chips, not beside them.
+    val label = rule.onNodeWithText("Premade items").assertIsDisplayed().screenBounds()
+    val helper = rule.onNodeWithText("One tap fills the name and a date.").assertIsDisplayed().screenBounds()
+    val milk = rule.onNodeWithText("Milk").assertIsDisplayed().screenBounds()
+    assertTrue("The label sits beside the chips: $label and $milk", label.bottom <= helper.top)
+    assertTrue("The helper sits beside the chips: $helper and $milk", helper.bottom <= milk.top)
+
+    // And the chip is whole: inside the 320dp window, and as wide as a target should be.
+    assertTrue(
+      "A whole chip has to fit in the window: $milk between ${frameLeft()} and ${frameRight()}",
+      milk.left >= frameLeft() && milk.right <= frameRight(),
+    )
+    assertTrue(
+      "A chip cut to ${milk.width}px is not a target",
+      milk.width >= with(rule.density) { 48.dp.toPx() },
+    )
+
+    // It still fills the draft, which is the point of it being there.
+    rule.onNodeWithText("Milk").performClick()
+    rule.waitForIdle()
+    assertTrue(events.toString(), "preset:Milk" in events)
+    assertEquals("Milk", state.draft?.name)
   }
 
   @Test
@@ -516,6 +591,8 @@ class FridgeContentWorkflowTest {
    * window is wider, and checking against it would pass whatever the frame does.
    */
   private fun frameRight(): Float = with(rule.density) { rule.onNodeWithTag(FrameTag).getUnclippedBoundsInRoot().right.toPx() }
+
+  private fun frameLeft(): Float = with(rule.density) { rule.onNodeWithTag(FrameTag).getUnclippedBoundsInRoot().left.toPx() }
 
   /**
    * Save is reachable by a finger while the keyboard is up: a real touch is sent where the button

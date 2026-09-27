@@ -114,7 +114,9 @@ class MainScreenViewModel(
   /**
    * Fills the new draft from a premade food: its name and today's date plus its suggested days.
    * Each field is filled only while the user has not decided it, so a typed name or a chosen date
-   * survives a later tap. Nothing is written to the fridge until Save.
+   * survives a later tap. A name the user has only started typing is the one exception: the
+   * shortcut finishes what they wrote rather than replacing it, which is what narrowing the lane
+   * to their typing promised them. Nothing is written to the fridge until Save.
    */
   fun onPresetSelected(preset: FoodPreset) {
     val current = draft.value ?: return
@@ -123,7 +125,8 @@ class MainScreenViewModel(
     val suggested = LocalDate.now().plusDays(days).toEpochDay()
     // Fill each field only while the user has not decided it: a name they typed and a date they
     // picked are theirs, and a tap must not take either back.
-    val keepName = current.name.isNotBlank() && !current.nameFromPreset
+    val typed = current.name.trim()
+    val keepName = typed.isNotEmpty() && !current.nameFromPreset && !preset.completes(typed)
     val keepDate = current.expiryEpochDay != null && current.presetEpochDay != current.expiryEpochDay
     draft.value =
       current.copy(

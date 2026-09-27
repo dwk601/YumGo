@@ -84,9 +84,14 @@ import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalFocusManager
@@ -96,6 +101,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.dwk.yumgo.R
 import com.dwk.yumgo.data.FoodPreset
@@ -139,7 +145,7 @@ fun ItemEditor(
       shape = MaterialTheme.shapes.extraLarge,
       containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
       contentColor = MaterialTheme.colorScheme.onSurface,
-      dragHandle = { SheetHeader(draft, presets, callbacks, compact) },
+      dragHandle = { SheetHeader(draft, compact) },
     ) {
       EditorBody(
         draft = draft,
@@ -167,37 +173,30 @@ private fun compactEditor(): Boolean {
 }
 
 /**
- * The sheet's own row. In a tall window the shortcuts fill it, because one tap is the whole point
- * of them and a lane that scrolls away is not one tap away; the slim handle they carry says the
- * sheet can be thrown away, and the row costs what the handle alone used to. A draft with nothing
- * to offer gets the standard handle back, and a short window has no height to spare at all, so
- * there the title shares the row with a slim handle and the shortcuts scroll with the rest.
+ * The sheet's own row, and nothing of the editor's goes in it. The slot's own tap closes the sheet
+ * in this Material version, so anything a user might aim at inside it takes a tap the user meant
+ * for the editor and throws the draft away. A tall window therefore gets the standard handle and
+ * nothing else; a short window has no height to spare for one, so the title shares the row with a
+ * slim handle, and the row takes the slot's tap itself.
  */
 @Composable
-private fun SheetHeader(
-  draft: ItemDraft,
-  presets: List<FoodPreset>,
-  callbacks: FridgeCallbacks,
-  compact: Boolean,
-) {
-  if (!compact && draft.id == null && presets.isNotEmpty()) {
-    PresetLane(
-      presets = presets,
-      typed = draft.name,
-      selectedId = draft.presetId,
-      enabled = !draft.saving,
-      onPreset = callbacks.onPresetSelected,
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-    )
-    return
-  }
+private fun SheetHeader(draft: ItemDraft, compact: Boolean) {
   if (!compact) {
     // A Column starts its children at the start, so the handle keeps its own centring row here.
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { BottomSheetDefaults.DragHandle() }
     return
   }
   Row(
-    modifier = Modifier.fillMaxWidth().height(32.dp).padding(start = 24.dp, end = 16.dp),
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .height(32.dp)
+        .padding(start = 24.dp, end = 16.dp)
+        .clickable(
+          interactionSource = remember { MutableInteractionSource() },
+          indication = null,
+          onClick = {},
+        ),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Text(
@@ -208,13 +207,19 @@ private fun SheetHeader(
       modifier = Modifier.weight(1f),
     )
     Spacer(Modifier.width(12.dp))
-    Box(
-      Modifier
-        .size(width = 32.dp, height = 4.dp)
-        .clip(RoundedCornerShape(2.dp))
-        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
-    )
+    DragBar()
   }
+}
+
+/** The slim handle the short window's header carries, and the only part of it that is a handle. */
+@Composable
+private fun DragBar() {
+  Box(
+    Modifier
+      .size(width = 32.dp, height = 4.dp)
+      .clip(RoundedCornerShape(2.dp))
+      .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
+  )
 }
 
 private fun editorTitle(draft: ItemDraft): Int =
@@ -255,7 +260,7 @@ private fun RestoredEditor(
       contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
       Column(Modifier.fillMaxWidth()) {
-        SheetHeader(draft, presets, callbacks, compact)
+        SheetHeader(draft, compact)
         EditorBody(
           draft = draft,
           callbacks = callbacks,
@@ -313,9 +318,10 @@ private fun EditorBody(
     nameValue = typed
     callbacks.onDraftChange(draft.copy(name = typed.text, errorMessage = null))
   }
-  // One field, one composition. Whichever layout is showing calls the same movable content, so a
-  // layout that changes under a live editor moves the field instead of rebuilding it, and the
-  // field keeps its focus, its text, and the keyboard the user opened.
+  // One field, one composition. The name and Save sit in the same row in both layouts, but that
+  // row stands in a different place in a short window, so the field is movable content: a layout
+  // that changes under a live editor moves the field rather than building it again, and the field
+  // keeps its focus, its text, and the keyboard the user opened.
   val nameFocused = remember { mutableStateOf(false) }
   val nameField = remember {
     // The draft and the value travel as parameters, not captured: a movable content keeps one
@@ -371,54 +377,55 @@ private fun EditorBody(
 
   BoxWithConstraints(Modifier.fillMaxWidth()) {
     Column(Modifier.fillMaxWidth().heightIn(max = maxHeight)) {
-      // A tall window has the shortcuts in the sheet's own row, above this, so the scrolling part
-      // starts at the title. A short window has no height to spare for a second row, so there the
-      // shortcuts scroll with the rest, still always the same size.
-      // A short window cannot fit the field and Save as separate rows, so they share one and
-      // everything else scrolls underneath. The focused field and Save stay on screen either way.
-      if (compact) {
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          nameField(draft, nameValue, onNameTyped, Modifier.weight(1f))
-          Spacer(Modifier.width(12.dp))
-          SaveButton(
-            draft = draft,
-            canSave = canSave,
-            compact = true,
-            onSave = callbacks.onSave,
-            modifier = Modifier.widthIn(min = 96.dp),
+      // A tall window has height to spare above the scrolling part, and it spends it on the title
+      // and the shortcuts: pinned, the lane is the same size before the first keystroke and after
+      // the last, so the sheet cannot jump, and the shortcuts stay the one tap they exist to be. A
+      // short window has no room for a second row, so there the title shares the sheet's own row
+      // and the shortcuts scroll with the rest, still always the same size.
+      if (!compact) {
+        Text(
+          text = stringResource(editorTitle(draft)),
+          style = MaterialTheme.typography.headlineSmall,
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        )
+        Spacer(Modifier.height(8.dp))
+        if (draft.id == null && presets.isNotEmpty()) {
+          PresetLane(
+            presets = presets,
+            typed = draft.name,
+            selectedId = draft.presetId,
+            enabled = !draft.saving,
+            onPreset = callbacks.onPresetSelected,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
           )
+          Spacer(Modifier.height(4.dp))
         }
-        EditorFields(
-          draft = draft,
-          callbacks = callbacks,
-          presets = presets,
-          showTitle = false,
-          modifier = Modifier.weight(1f, fill = false).editorScroll(scroll) { viewportBottom = it },
-          onPickDate = { pickingDate = true },
-          onMessageBounds = { messageBottom = it },
-        )
-      } else {
-        EditorFields(
-          draft = draft,
-          callbacks = callbacks,
-          // The shortcuts are already pinned above, so the scrolling part starts at the title.
-          presets = emptyList(),
-          nameField = { fieldModifier -> nameField(draft, nameValue, onNameTyped, fieldModifier) },
-          modifier = Modifier.weight(1f, fill = false).editorScroll(scroll) { viewportBottom = it },
-          onPickDate = { pickingDate = true },
-          onMessageBounds = { messageBottom = it },
-        )
+      }
+      // The name and Save share one row in both layouts: the field the user is typing into and the
+      // button that saves it are the two things that must never scroll away from a keyboard.
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        nameField(draft, nameValue, onNameTyped, Modifier.weight(1f))
+        Spacer(Modifier.width(12.dp))
         SaveButton(
           draft = draft,
           canSave = canSave,
-          compact = false,
           onSave = callbacks.onSave,
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+          modifier = Modifier.widthIn(min = 96.dp),
         )
       }
+      EditorFields(
+        draft = draft,
+        callbacks = callbacks,
+        // In a tall window the shortcuts are already pinned above, so the scrolling part starts at
+        // the quantity; in a short one there was no room to pin them, so they scroll with the rest.
+        presets = if (compact) presets else emptyList(),
+        modifier = Modifier.weight(1f, fill = false).editorScroll(scroll) { viewportBottom = it },
+        onPickDate = { pickingDate = true },
+        onMessageBounds = { messageBottom = it },
+      )
     }
   }
 
@@ -441,9 +448,9 @@ private fun Modifier.editorScroll(scroll: ScrollState, onViewportBottom: (Float)
     .onGloballyPositioned { onViewportBottom(it.boundsInWindow().bottom) }
 
 /**
- * The scrolling part of the editor, from the title down to Remove. [nameField] is the editor's
- * one text field, handed in so that both layouts place the same instance, and [showTitle] is off
- * in the short layout, where the sheet header carries the title instead.
+ * The editor's scrolling part, from the shortcuts down to Remove. It never holds the title or the
+ * name field: both are pinned, because a sheet that scrolls the field the user is typing into out
+ * of sight is worse than one that scrolls the parts they only visit now and then.
  */
 @Composable
 private fun EditorFields(
@@ -451,23 +458,12 @@ private fun EditorFields(
   callbacks: FridgeCallbacks,
   presets: List<FoodPreset>,
   modifier: Modifier = Modifier,
-  nameField: (@Composable (Modifier) -> Unit)? = null,
-  showTitle: Boolean = true,
   onPickDate: () -> Unit,
   onMessageBounds: (Float) -> Unit,
 ) {
   Column(modifier) {
-    if (showTitle) {
-      Text(text = stringResource(editorTitle(draft)), style = MaterialTheme.typography.headlineSmall)
-      Spacer(Modifier.height(16.dp))
-    }
-    if (nameField != null) {
-      nameField(Modifier.fillMaxWidth())
-      Spacer(Modifier.height(8.dp))
-    }
-    // The shortcuts are the fast path for the first choice, and the row stays where it is: it
-    // keeps its height whether or not a name has been typed, so the sheet cannot jump under the
-    // user's first keystroke, and the photo section stays above the keyboard.
+    // A short window has no row to pin the shortcuts to, so they open this part instead. The lane
+    // is the same size either way, so the sheet cannot jump under the user's first keystroke.
     if (draft.id == null && presets.isNotEmpty()) {
       PresetLane(
         presets = presets,
@@ -475,8 +471,9 @@ private fun EditorFields(
         selectedId = draft.presetId,
         enabled = !draft.saving,
         onPreset = callbacks.onPresetSelected,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
       )
+      Spacer(Modifier.height(8.dp))
     }
     Spacer(Modifier.height(8.dp))
     Text(text = stringResource(R.string.editor_quantity_label), style = MaterialTheme.typography.labelLarge)
@@ -544,12 +541,11 @@ private fun NameField(
   )
 }
 
-/** Save, full width in a tall window and beside the name in a short one. */
+/** Save, beside the name in every window, and never anywhere a keyboard can reach it. */
 @Composable
 private fun SaveButton(
   draft: ItemDraft,
   canSave: Boolean,
-  compact: Boolean,
   onSave: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -557,10 +553,7 @@ private fun SaveButton(
   Button(
     onClick = onSave,
     enabled = canSave,
-    modifier =
-      modifier.then(
-        if (compact) Modifier.heightIn(min = 48.dp) else Modifier.padding(vertical = 12.dp).heightIn(min = 52.dp),
-      ),
+    modifier = modifier.heightIn(min = 48.dp),
     shape = MaterialTheme.shapes.extraLarge,
   ) {
     AnimatedContent(
@@ -579,12 +572,13 @@ private fun SaveButton(
 }
 
 /**
- * The shortcuts, as one lane of taps: the label holds still at the left and the chips scroll past
- * it, narrowed to what has been typed. A name the user has typed narrows the lane to the shortcuts
- * that start with it, while a name that is a shortcut's own leaves the whole list standing, so one
- * shortcut can be swapped for another; the applied one is always listed, so the lane never empties
- * itself out under them. Whatever the lane carries, it keeps the same height, so nothing around it
- * moves: a row that came and went on the first keystroke took the sheet with it.
+ * The shortcuts: what they are, what one tap of them does, and the taps themselves.
+ *
+ * The lane is the same size whatever it carries, so nothing around it moves and the sheet cannot
+ * jump under a keystroke. The chips narrow to what has been typed, and only while that could finish
+ * the name, because a lane narrowed to something a tap cannot complete reads as a promise it does
+ * not keep. A name that is already a shortcut's own leaves the whole list standing, so one
+ * shortcut can be swapped for another.
  */
 @Composable
 private fun PresetLane(
@@ -596,42 +590,28 @@ private fun PresetLane(
   modifier: Modifier = Modifier,
 ) {
   val name = typed.trim()
-  // A name that is a shortcut's own leaves the whole list standing, so one shortcut can be swapped
-  // for another; any other name narrows the lane to the shortcuts that start with it.
-  val narrowed = name.isNotEmpty() && presets.none { it.name.equals(name, ignoreCase = true) }
-  val shown = presets.filter { !narrowed || it.id == selectedId || it.name.startsWith(name, ignoreCase = true) }
-  Row(modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-    // The lane stands in for the row the sheet's drag handle used to have, so it keeps a handle:
-    // a small bar at the start of the row says the sheet can be thrown away.
-    Box(
-      Modifier
-        .size(width = 32.dp, height = 4.dp)
-        .clip(RoundedCornerShape(2.dp))
-        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
-    )
-    Spacer(Modifier.width(12.dp))
+  val completions = presets.filter { it.completes(name) }
+  val named = presets.any { it.name.equals(name, ignoreCase = true) }
+  val shown = if (completions.isEmpty() || named) presets else completions
+  Column(modifier) {
+    Text(text = stringResource(R.string.editor_presets_label), style = MaterialTheme.typography.labelLarge)
     Text(
-      text = stringResource(R.string.editor_presets_label),
-      style = MaterialTheme.typography.labelLarge,
+      text = stringResource(R.string.editor_presets_hint),
+      style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
-      maxLines = 1,
+      modifier = Modifier.padding(top = 2.dp),
     )
-    Spacer(Modifier.width(8.dp))
+    Spacer(Modifier.height(4.dp))
+    // The chips scroll, and both ends fade into the sheet rather than slicing a chip in half. A
+    // chip cut off by an edge reads as something broken, not as more to come.
+    val chips = rememberScrollState()
     Row(
-      modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+      modifier = Modifier.fillMaxWidth().scrollEdgeFade(chips, MaterialTheme.colorScheme.surfaceContainerLow)
+        .horizontalScroll(chips)
+        .heightIn(min = 48.dp),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      if (shown.isEmpty()) {
-        Text(
-          text = stringResource(R.string.editor_presets_none),
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        return@Row
-      }
       shown.forEach { preset ->
         val selected = preset.id == selectedId
         OutlinedButton(
@@ -656,9 +636,38 @@ private fun PresetLane(
           Text(preset.name, maxLines = 1)
         }
       }
+      // The fade needs something to fade into, and a last chip flush against it reads as cut off.
+      Spacer(Modifier.width(EdgeFadeWidthDp))
     }
   }
 }
+
+/**
+ * Fades the edges of a row that scrolls, on the sides that have something behind them. The reads
+ * happen while drawing, so scrolling repaints the fade and nothing else.
+ */
+private fun Modifier.scrollEdgeFade(state: ScrollState, color: Color, width: Dp = EdgeFadeWidthDp): Modifier =
+  drawWithContent {
+    drawContent()
+    val fade = width.toPx()
+    if (state.value > 0f) {
+      drawRect(
+        brush = Brush.horizontalGradient(listOf(Color.Transparent, color), startX = 0f, endX = fade),
+        size = Size(fade, size.height),
+      )
+    }
+    if (state.value < state.maxValue) {
+      drawRect(
+        brush = Brush.horizontalGradient(
+          colors = listOf(Color.Transparent, color),
+          startX = size.width - fade,
+          endX = size.width,
+        ),
+        topLeft = Offset(size.width - fade, 0f),
+        size = Size(fade, size.height),
+      )
+    }
+  }
 
 /**
  * Expiry label, value, and actions stack instead of sharing one line, so a long date and two
@@ -809,12 +818,13 @@ private fun <T> motionFade(): FiniteAnimationSpec<T> = MaterialTheme.motionSchem
 private const val CompactWindowHeightDp = 480
 
 /**
- * The name field's value, saved as its text and the two ends of its selection. A [Saver] has to
- * hand the registry something a bundle can hold, and a text value is not one of them.
+ * The name field's value, saved as its text and the two ends of its selection, in order: a
+ * backwards selection has to come back backwards. A [Saver] has to hand the registry something a
+ * bundle can hold, and a text value is not one of them.
  */
 private val NameValueSaver: Saver<TextFieldValue, Any> =
   listSaver(
-    save = { listOf(it.text, it.selection.min, it.selection.max) },
+    save = { listOf(it.text, it.selection.start, it.selection.end) },
     restore = { saved ->
       TextFieldValue(text = saved[0] as String, selection = TextRange(saved[1] as Int, saved[2] as Int))
     },
@@ -822,6 +832,9 @@ private val NameValueSaver: Saver<TextFieldValue, Any> =
 
 /** How long the editor waits for the sheet to be measured before revealing a photo problem. */
 private const val RevealWaitMillis = 1_500L
+
+/** How wide the fade at the ends of the shortcut lane is, and the gap it needs to fade into. */
+private val EdgeFadeWidthDp = 16.dp
 
 /** Frames the scroll range must hold still before the editor scrolls to a photo problem. */
 private const val SettledFrames = 3

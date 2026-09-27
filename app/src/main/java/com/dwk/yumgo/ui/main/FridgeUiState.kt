@@ -46,6 +46,15 @@ data class FridgeItemUi(
   val photoReference: String?,
 )
 
+/**
+ * Whether taking this shortcut would finish a partly typed [name] rather than replace it. The
+ * editor narrows its lane to the shortcuts that would, because a lane narrowed to something a tap
+ * cannot finish reads as a promise it does not keep; a name typed whole is the user's own, and a
+ * shortcut's own name is already there, so neither gains anything from a tap.
+ */
+fun FoodPreset.completes(typed: String): Boolean =
+  typed.isNotEmpty() && name.length > typed.length && name.startsWith(typed, ignoreCase = true)
+
 /** Controlled editor fields. Photo changes go through [FridgeCallbacks], not a copied draft. */
 data class ItemDraft(
   val id: String?,

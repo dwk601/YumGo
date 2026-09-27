@@ -9,6 +9,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertTextContains
@@ -232,26 +233,37 @@ class FridgeWorkflowTest {
   }
 
   /**
-   * The add sheet's shortcuts narrow to what has been typed, and applying one fills only what the
-   * user has not decided: an empty field takes the shortcut's name and date, a typed name is left
-   * alone, and both save what the field says.
+   * A shortcut fills what the user has not decided and nothing they have. A name they have only
+   * started is finished, because narrowing the lane to their typing promised a tap would complete
+   * it; a name they typed whole is left alone, and the shortcut's date is filled under it.
    */
   @Test
-  fun shortcut_fillsAnEmptyNameAndLeavesATypedOneAlone() {
+  fun shortcut_finishesAPartTypedNameAndLeavesAWholeOneAlone() {
     addButton().performClick()
     composeRule.waitUntil(15_000) { nodeCount("Premade items") > 0 }
-    // "Mi" narrows the row down to the one shortcut that starts with it.
-    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Mi")
+    val name = composeRule.onNode(hasSetTextAction() and hasText("Name", substring = true))
+
+    // "Mi" narrows the lane to the one shortcut it can finish, and the tap finishes it.
+    name.performTextInput("Mi")
     composeRule.waitUntil(10_000) { nodeCount("Milk") > 0 }
     composeRule.onNodeWithText("Milk").performClick()
     composeRule.waitUntil(10_000) { nodeCount("In 7 days") > 0 }
-    val typed = composeRule.onNode(hasSetTextAction() and hasText("Name", substring = true))
-    typed.assertTextContains("Mi")
-    val spoken = typed.fetchSemanticsNode().config[SemanticsProperties.Text].map { it.text }
-    assertTrue("The shortcut took the name the user typed: $spoken", "Milk" !in spoken)
+    name.assertTextContains("Milk")
+
+    // A name of their own is not replaced by a shortcut, and the date is filled under it.
+    name.performTextReplacement("Kale")
+    composeRule.onNodeWithText("Clear expiry date").performClick()
+    composeRule.waitUntil(10_000) { nodeCount("No expiry") > 0 }
+    composeRule.onNodeWithText("Milk").performClick()
+    composeRule.waitUntil(10_000) { nodeCount("In 7 days") > 0 }
+    val spoken = name.spoken()
+    assertTrue("The shortcut took a name the user typed whole: $spoken", "Kale" in spoken)
+    assertTrue("The shortcut took a name the user typed whole: $spoken", "Milk" !in spoken)
+    assertTrue("The shortcut took a name the user typed whole: $spoken", "Milk" !in spoken)
     composeRule.onNodeWithText("Save").performClick()
-    composeRule.waitUntil(15_000) { nodeCount("Mi") > 0 }
-    composeRule.onNodeWithText("Mi").assertIsDisplayed()
+    composeRule.waitUntil(15_000) { nodeCount("Kale") > 0 }
+    composeRule.onNodeWithText("Kale").assertIsDisplayed()
+    composeRule.onNodeWithText("In 7 days").assertIsDisplayed()
 
     // An empty field takes the shortcut's name as well as its date.
     addButton().performClick()
@@ -487,6 +499,19 @@ class FridgeWorkflowTest {
    * Where the caret sits in the name field, read from what the field publishes. A field that
    * reports its selection at the start of the text has thrown away the place the user was at.
    */
+  /**
+   * Everything the name field puts in the tree, label and value alike: a text field's value lives
+   * beside its label in the semantics rather than inside it.
+   */
+  private fun SemanticsNodeInteraction.spoken(): List<String> {
+    val config = fetchSemanticsNode().config
+    return buildList {
+      addAll(config[SemanticsProperties.Text].orEmpty().map { it.text })
+      config[SemanticsProperties.InputText]?.let { add(it.text) }
+      config[SemanticsProperties.EditableText]?.let { add(it.text) }
+    }
+  }
+
   private fun caret(): Int? {
     val range =
       composeRule
