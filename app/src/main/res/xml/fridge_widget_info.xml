@@ -5,8 +5,12 @@
   updatePeriodMillis keeps the date-relative labels honest while the app is closed. The system
   clamps it to 30 minutes, which is the shortest period it honours, so nothing refreshes more
   often than a manual save already does.
+
+  maxResize*, previewLayout and targetCell* are API 31 attributes; launchers on older releases read
+  the min sizes instead and the card still lays out from the size the host reports at run time.
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:description="@string/widget_description"
     android:initialLayout="@layout/fridge_widget"
     android:maxResizeHeight="480dp"
@@ -21,4 +25,5 @@
     android:targetCellHeight="2"
     android:targetCellWidth="4"
     android:updatePeriodMillis="1800000"
-    android:widgetCategory="home_screen" />
+    android:widgetCategory="home_screen"
+    tools:targetApi="31" />

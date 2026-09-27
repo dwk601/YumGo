@@ -31,11 +31,10 @@ internal enum class FridgeWidgetTone(val background: Int, val text: Int) {
  * ignores the device's darkness and any saved app theme. Rows come from the repository's order, so
  * the widget lists the same items, in the same order, as the fridge screen.
  *
- * Failing safe matters here because the row count is worked out when the card is built, while the
- * text is measured when the host lays it out. A system font-scale change therefore leaves a card
- * that was budgeted for the old text until the next update. The layout absorbs that: the rows sit
- * in a container of their own that the host clips, and the "more" line sits outside it, so a stale
- * budget cuts the tail of the list and never the summary.
+ * The row count is worked out here, from the height the host reported and the size of the text at
+ * this moment. Both are then handed to the card as fixed pixel sizes, so the launcher's own layout
+ * can only reproduce the card as it was budgeted: a system font-scale change in between neither
+ * clips a row nor leaves a gap, and the new scale arrives with the next refresh.
  */
 internal object FridgeWidgetRenderer {
   private const val DefaultRows = 3
@@ -50,13 +49,32 @@ internal object FridgeWidgetRenderer {
   private const val RowSafetyDp = 1f
   private const val RowTextSp = 13f
   private const val TitleSp = 13f
+  private const val SummarySp = 11f
+  private const val BadgeSp = 11f
   private const val FooterTextSp = 11f
+  private const val MessageSp = 12f
 
   /** The box the card sits in, in dp. */
   private data class WidgetSize(val widthDp: Float, val heightDp: Float)
 
   /** How many items the card shows, and how many that leaves off the list. */
   private data class RowWindow(val rows: Int, val hidden: Int)
+
+  /**
+   * Text sizes in px, resolved once per card and set on the views as fixed pixel sizes.
+   *
+   * These are the same values [textHeightDp] measures, so the rows the host lays out are the rows
+   * the budget counted. Freezing them is what keeps a later font-scale change from clipping a row
+   * or opening a gap under a "more" line that still counts the items the user cannot see.
+   */
+  private data class TextPx(
+    val title: Float,
+    val summary: Float,
+    val row: Float,
+    val badge: Float,
+    val more: Float,
+    val message: Float,
+  )
 
   suspend fun render(context: Context, manager: AppWidgetManager, ids: IntArray) {
     val snapshot = FridgeWidgetData.snapshot(context)
@@ -80,6 +98,10 @@ internal object FridgeWidgetRenderer {
    * rotation: the app can be in landscape while the home screen stays portrait, and guessing from
    * the app's configuration then built a portrait card with landscape's two columns. The host picks
    * the closest size and re-picks it whenever the widget is resized or re-laid out.
+   *
+   * Before API 31 there is no list to map, so the single card falls back to the platform's
+   * min/max options. That one still has to assume an orientation from the app's own configuration,
+   * which is wrong in the same landscape-save case until the next refresh.
    */
   private fun cardFor(
     context: Context,
@@ -87,13 +109,12 @@ internal object FridgeWidgetRenderer {
     snapshot: FridgeWidgetSnapshot,
   ): RemoteViews {
     val openFridge = openFridge(context)
-    val sizes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) reportedSizes(options).distinct() else emptyList()
-    if (sizes.isNotEmpty()) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       val bySize =
-        sizes.associateWith { size ->
+        reportedSizes(options).distinct().associateWith { size ->
           cardViews(context, WidgetSize(size.width, size.height), snapshot, openFridge)
         }
-      return RemoteViews(bySize)
+      if (bySize.isNotEmpty()) return RemoteViews(bySize)
     }
     return cardViews(context, legacySize(context, options), snapshot, openFridge)
   }
@@ -104,6 +125,7 @@ internal object FridgeWidgetRenderer {
     snapshot: FridgeWidgetSnapshot,
     openFridge: PendingIntent,
   ): RemoteViews {
+    val text = textPx(context)
     val views = RemoteViews(context.packageName, R.layout.fridge_widget)
     // A redraw replays these actions on the views already on the home screen, so the previous rows
     // have to go first. Without this they pile up, and rows hidden by an empty or failed render
@@ -112,6 +134,7 @@ internal object FridgeWidgetRenderer {
     views.removeAllViews(R.id.widget_column_end)
     views.setTextViewText(R.id.widget_title, context.getString(R.string.widget_title))
     views.setOnClickPendingIntent(R.id.fridge_widget_root, openFridge)
+    setTextSizes(views, text, card = true)
 
     when (snapshot) {
       FridgeWidgetSnapshot.Empty -> {
@@ -128,7 +151,7 @@ internal object FridgeWidgetRenderer {
         views.setTextViewText(R.id.widget_summary, "")
         views.setViewVisibility(R.id.widget_more, View.GONE)
       }
-      is FridgeWidgetSnapshot.Items -> renderItems(context, views, size, snapshot)
+      is FridgeWidgetSnapshot.Items -> renderItems(context, views, size, snapshot, text)
     }
     return views
   }
@@ -138,6 +161,7 @@ internal object FridgeWidgetRenderer {
     views: RemoteViews,
     size: WidgetSize?,
     snapshot: FridgeWidgetSnapshot.Items,
+    text: TextPx,
   ) {
     val total = snapshot.rows.size
     val window = rowWindow(context, size, total)
@@ -165,7 +189,7 @@ internal object FridgeWidgetRenderer {
 
     snapshot.rows.take(rows).forEachIndexed { index, row ->
       val column = if (twoColumns && index % 2 == 1) R.id.widget_column_end else R.id.widget_column_start
-      views.addView(column, rowView(context, row))
+      views.addView(column, rowView(context, row, text))
     }
 
     if (hidden > 0) {
@@ -176,13 +200,46 @@ internal object FridgeWidgetRenderer {
     }
   }
 
-  private fun rowView(context: Context, row: FridgeWidgetRow): RemoteViews {
+  private fun rowView(context: Context, row: FridgeWidgetRow, text: TextPx): RemoteViews {
     val views = RemoteViews(context.packageName, R.layout.fridge_widget_row)
     views.setTextViewText(R.id.widget_row_name, row.name)
     views.setTextViewText(R.id.widget_row_expiry, row.label)
     views.setTextColor(R.id.widget_row_expiry, row.tone.text)
     views.setInt(R.id.widget_row_expiry, "setBackgroundResource", row.tone.background)
+    setTextSizes(views, text, card = false)
     return views
+  }
+
+  /**
+   * Pins the card's text to the pixel sizes the budget was measured against. Without this the
+   * layout would scale the text again at the host, and a font-scale change between a refresh and
+   * the next one would move the rows out from under the count the card was built with.
+   */
+  private fun setTextSizes(views: RemoteViews, text: TextPx, card: Boolean) {
+    fun size(viewId: Int, px: Float) =
+      views.setTextViewTextSize(viewId, TypedValue.COMPLEX_UNIT_PX, px)
+    if (card) {
+      size(R.id.widget_title, text.title)
+      size(R.id.widget_summary, text.summary)
+      size(R.id.widget_more, text.more)
+      size(R.id.widget_message, text.message)
+    } else {
+      size(R.id.widget_row_name, text.row)
+      size(R.id.widget_row_expiry, text.badge)
+    }
+  }
+
+  private fun textPx(context: Context): TextPx {
+    fun px(sizeSp: Float) =
+      TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sizeSp, context.resources.displayMetrics)
+    return TextPx(
+      title = px(TitleSp),
+      summary = px(SummarySp),
+      row = px(RowTextSp),
+      badge = px(BadgeSp),
+      more = px(FooterTextSp),
+      message = px(MessageSp),
+    )
   }
 
   /**
@@ -235,7 +292,14 @@ internal object FridgeWidgetRenderer {
     return WidgetSize(widthDp = width.toFloat(), heightDp = height.toFloat())
   }
 
-  /** The sizes the host offers on API 31 and newer: one per configuration, in dp. */
+  /**
+   * The sizes the host offers on API 31 and newer: one per configuration, in dp.
+   *
+   * [AppWidgetManager.OPTION_APPWIDGET_SIZES] is a String constant, so it is inlined and reading it
+   * on an older release is harmless: the key simply is not in the bundle there, and the caller falls
+   * back to the min/max options.
+   */
+  @Suppress("InlinedApi")
   private fun reportedSizes(options: Bundle): List<SizeF> =
     runCatching {
       BundleCompat.getParcelableArrayList(options, AppWidgetManager.OPTION_APPWIDGET_SIZES, SizeF::class.java)
@@ -245,10 +309,10 @@ internal object FridgeWidgetRenderer {
 
   /** Only the pre-API-31 path needs this; the host picks the size otherwise. */
   private fun isPortrait(context: Context): Boolean {
-    when (context.resources.configuration.orientation) {
-      Configuration.ORIENTATION_PORTRAIT -> return true
-      Configuration.ORIENTATION_LANDSCAPE -> return false
-    }
+    val orientation = context.resources.configuration.orientation
+    if (orientation == Configuration.ORIENTATION_LANDSCAPE) return false
+    if (orientation == Configuration.ORIENTATION_PORTRAIT) return true
+    // Square or undefined, as a watch or an unfolded foldable reports: the taller box is portrait.
     val metrics = context.resources.displayMetrics
     return metrics.heightPixels >= metrics.widthPixels
   }
