@@ -28,4 +28,17 @@
         <item quantity="other">%d days overdue</item>
     </plurals>
     <string name="widget_expiry_no_date">No date</string>
+
+    <!--
+      Sample content for the widget picker preview and for the brief moment between placing the
+      widget and its first update. The first real render clears these rows before adding the saved
+      items, so nothing here can survive into the live widget.
+    -->
+    <string name="widget_preview_summary">3 to use soon</string>
+    <string name="widget_preview_row_one">Spinach · 1</string>
+    <string name="widget_preview_row_two">Whole Milk · 3</string>
+    <string name="widget_preview_row_three">Greek Yoghurt · 1</string>
+    <string name="widget_preview_badge_one">3 days overdue</string>
+    <string name="widget_preview_badge_two">Today</string>
+    <string name="widget_preview_badge_three">Tomorrow</string>
 </resources>

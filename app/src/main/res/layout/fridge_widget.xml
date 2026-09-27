@@ -47,17 +47,24 @@
             android:ellipsize="end"
             android:gravity="end"
             android:maxLines="1"
+            android:text="@string/widget_preview_summary"
             android:textColor="#444842"
             android:textSize="11sp" />
     </LinearLayout>
 
-    <View
+    <!--
+      The rule is a TextView on purpose: a widget layout may only inflate a fixed set of classes and
+      a plain View is not one of them, which fails the whole card with "Can't load widget".
+    -->
+    <TextView
         android:id="@+id/widget_divider"
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:layout_marginTop="8dp"
         android:layout_marginBottom="8dp"
-        android:background="@drawable/fridge_widget_divider" />
+        android:background="@drawable/fridge_widget_divider"
+        android:importantForAccessibility="no"
+        android:text="" />
 
     <LinearLayout
         android:id="@+id/widget_columns"
@@ -67,12 +74,120 @@
         android:baselineAligned="false"
         android:orientation="horizontal">
 
+        <!--
+          Sample rows keep the widget picker preview, and the moment between placing the widget and
+          its first update, honest. They repeat the markup of fridge_widget_row.xml on purpose: a
+          render clears this column before adding the saved items, so the samples never survive.
+        -->
         <LinearLayout
             android:id="@+id/widget_column_start"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:orientation="vertical" />
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="3dp"
+                android:paddingBottom="3dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="@string/widget_preview_row_one"
+                    android:textColor="#1C1C19"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/fridge_widget_badge_overdue"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:paddingStart="7dp"
+                    android:paddingTop="2dp"
+                    android:paddingEnd="7dp"
+                    android:paddingBottom="2dp"
+                    android:text="@string/widget_preview_badge_one"
+                    android:textColor="#410002"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="3dp"
+                android:paddingBottom="3dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="@string/widget_preview_row_two"
+                    android:textColor="#1C1C19"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/fridge_widget_badge_soon"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:paddingStart="7dp"
+                    android:paddingTop="2dp"
+                    android:paddingEnd="7dp"
+                    android:paddingBottom="2dp"
+                    android:text="@string/widget_preview_badge_two"
+                    android:textColor="#2D1600"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="3dp"
+                android:paddingBottom="3dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="@string/widget_preview_row_three"
+                    android:textColor="#1C1C19"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/fridge_widget_badge_upcoming"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:paddingStart="7dp"
+                    android:paddingTop="2dp"
+                    android:paddingEnd="7dp"
+                    android:paddingBottom="2dp"
+                    android:text="@string/widget_preview_badge_three"
+                    android:textColor="#002114"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </LinearLayout>
 
         <LinearLayout
             android:id="@+id/widget_column_end"

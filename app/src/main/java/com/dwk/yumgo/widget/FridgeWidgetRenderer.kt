@@ -53,6 +53,11 @@ internal object FridgeWidgetRenderer {
   ) {
     val options = manager.getAppWidgetOptions(id)
     val views = RemoteViews(context.packageName, R.layout.fridge_widget)
+    // A redraw replays these actions on the views already on the home screen, so the previous rows
+    // have to go first. Without this they pile up, and rows hidden by an empty or failed render
+    // come back on the next successful one.
+    views.removeAllViews(R.id.widget_column_start)
+    views.removeAllViews(R.id.widget_column_end)
     views.setTextViewText(R.id.widget_title, context.getString(R.string.widget_title))
     views.setOnClickPendingIntent(R.id.fridge_widget_root, openFridge(context))
 
@@ -161,11 +166,21 @@ internal object FridgeWidgetRenderer {
   private fun dp(context: Context, value: Float): Float =
     TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics)
 
-  /** Explicit and immutable, so no other app can retarget the tap. */
+  /**
+   * Explicit and immutable, so no other app can retarget the tap.
+   *
+   * The flags are the launcher's own: they bring the running task forward and, because
+   * [Intent.FLAG_ACTIVITY_SINGLE_TOP] is set, hand the tap to the activity that is already showing.
+   * A tap must never restart [MainActivity] and throw away an open sheet or an unsaved draft.
+   */
   private fun openFridge(context: Context): PendingIntent {
     val intent =
       Intent(context, MainActivity::class.java).apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        addFlags(
+          Intent.FLAG_ACTIVITY_NEW_TASK or
+            Intent.FLAG_ACTIVITY_SINGLE_TOP or
+            Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED,
+        )
       }
     return PendingIntent.getActivity(
       context,
