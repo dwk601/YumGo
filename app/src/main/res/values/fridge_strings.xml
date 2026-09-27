@@ -25,6 +25,8 @@
     <string name="fridge_section_undated">No date</string>
     <string name="fridge_decrease_quantity">Decrease quantity of %1$s</string>
     <string name="fridge_increase_quantity">Increase quantity of %1$s</string>
+    <string name="fridge_decrease_quantity_unnamed">Decrease quantity</string>
+    <string name="fridge_increase_quantity_unnamed">Increase quantity</string>
     <string name="fridge_quantity">Quantity %1$d</string>
     <string name="fridge_edit_item">Edit item</string>
     <string name="fridge_item_expired">Expired %1$s</string>

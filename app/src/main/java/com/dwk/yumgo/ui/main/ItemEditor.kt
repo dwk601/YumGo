@@ -433,7 +433,8 @@ private fun EditorFields(
     Text(text = stringResource(R.string.editor_quantity_label), style = MaterialTheme.typography.labelLarge)
     QuantityStepper(
       quantity = draft.quantity,
-      name = draft.name.ifBlank { stringResource(R.string.editor_name_label) },
+      // An unnamed draft falls back to the bare action, so it never announces "of Name".
+      name = draft.name,
       onQuantityChange = { callbacks.onDraftChange(draft.copy(quantity = it, errorMessage = null)) },
       enabled = !draft.saving,
       modifier = Modifier.padding(top = 8.dp),

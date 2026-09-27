@@ -496,10 +496,24 @@ internal fun QuantityStepper(
 ) {
   val quantityFade = motionEffects<Float>()
   val quantitySlide = motionSpatial<IntOffset>()
+  // A draft that has not been named yet has nothing to name the buttons after, so it gets the
+  // bare action instead of announcing the field's own label.
+  val decreaseLabel =
+    if (name.isBlank()) {
+      stringResource(R.string.fridge_decrease_quantity_unnamed)
+    } else {
+      stringResource(R.string.fridge_decrease_quantity, name)
+    }
+  val increaseLabel =
+    if (name.isBlank()) {
+      stringResource(R.string.fridge_increase_quantity_unnamed)
+    } else {
+      stringResource(R.string.fridge_increase_quantity, name)
+    }
   Surface(modifier = modifier, shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainer) {
     Row(verticalAlignment = Alignment.CenterVertically) {
       IconButton(onClick = { onQuantityChange(quantity - 1) }, enabled = enabled && quantity > 1) {
-        Icon(FridgeMinus, contentDescription = stringResource(R.string.fridge_decrease_quantity, name))
+        Icon(FridgeMinus, contentDescription = decreaseLabel)
       }
       AnimatedContent(
         targetState = quantity,
@@ -521,7 +535,7 @@ internal fun QuantityStepper(
         )
       }
       IconButton(onClick = { onQuantityChange(quantity + 1) }, enabled = enabled && quantity < MaxQuantity) {
-        Icon(FridgePlus, contentDescription = stringResource(R.string.fridge_increase_quantity, name))
+        Icon(FridgePlus, contentDescription = increaseLabel)
       }
     }
   }
