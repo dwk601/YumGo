@@ -91,6 +91,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dwk.yumgo.R
 import com.dwk.yumgo.data.FoodPreset
@@ -134,7 +135,7 @@ fun ItemEditor(
       shape = MaterialTheme.shapes.extraLarge,
       containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
       contentColor = MaterialTheme.colorScheme.onSurface,
-      dragHandle = { SheetHandle(compact) },
+      dragHandle = { SheetHeader(draft, compact) },
     ) {
       EditorBody(
         draft = draft,
@@ -161,14 +162,31 @@ private fun compactEditor(): Boolean {
   return remember(screenHeight) { screenHeight < CompactWindowHeightDp }
 }
 
-/** The handle is decorative, so a short window gets a short one. */
+/**
+ * The sheet's own row. A tall window gets the standard drag handle and its title stays at the top
+ * of the scrolling column. A short window has no height to spare, so the title shares this row
+ * with a slim handle: the title still reads first, and the row costs 32dp instead of the 40dp
+ * the title would need on its own.
+ */
 @Composable
-private fun SheetHandle(compact: Boolean) {
+private fun SheetHeader(draft: ItemDraft, compact: Boolean) {
   if (!compact) {
-    BottomSheetDefaults.DragHandle()
+    // A Column starts its children at the start, so the handle keeps its own centring row here.
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { BottomSheetDefaults.DragHandle() }
     return
   }
-  Box(Modifier.fillMaxWidth().height(16.dp), contentAlignment = Alignment.Center) {
+  Row(
+    modifier = Modifier.fillMaxWidth().height(32.dp).padding(start = 24.dp, end = 16.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = stringResource(editorTitle(draft)),
+      style = MaterialTheme.typography.titleMedium,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.weight(1f),
+    )
+    Spacer(Modifier.width(12.dp))
     Box(
       Modifier
         .size(width = 32.dp, height = 4.dp)
@@ -177,6 +195,9 @@ private fun SheetHandle(compact: Boolean) {
     )
   }
 }
+
+private fun editorTitle(draft: ItemDraft): Int =
+  if (draft.id == null) R.string.editor_add_title else R.string.editor_edit_title
 
 @Composable
 private fun RestoredEditor(
@@ -213,7 +234,7 @@ private fun RestoredEditor(
       contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
       Column(Modifier.fillMaxWidth()) {
-        SheetHandle(compact)
+        SheetHeader(draft, compact)
         EditorBody(
           draft = draft,
           callbacks = callbacks,
@@ -328,6 +349,7 @@ private fun EditorBody(
           draft = draft,
           callbacks = callbacks,
           presets = presets,
+          showTitle = false,
           modifier = Modifier.weight(1f, fill = false).editorScroll(scroll) { viewportBottom = it },
           onPickDate = { pickingDate = true },
           onMessageBounds = { messageBottom = it },
@@ -373,7 +395,8 @@ private fun Modifier.editorScroll(scroll: ScrollState, onViewportBottom: (Float)
 
 /**
  * The scrolling part of the editor, from the title down to Remove. [nameField] is the editor's
- * one text field, handed in so that both layouts place the same instance.
+ * one text field, handed in so that both layouts place the same instance, and [showTitle] is off
+ * in the short layout, where the sheet header carries the title instead.
  */
 @Composable
 private fun EditorFields(
@@ -381,15 +404,16 @@ private fun EditorFields(
   callbacks: FridgeCallbacks,
   presets: List<FoodPreset>,
   modifier: Modifier = Modifier,
-  nameField: (@Composable (Modifier) -> Unit)? = null,  onPickDate: () -> Unit,
+  nameField: (@Composable (Modifier) -> Unit)? = null,
+  showTitle: Boolean = true,
+  onPickDate: () -> Unit,
   onMessageBounds: (Float) -> Unit,
 ) {
   Column(modifier) {
-    Text(
-      text = stringResource(if (draft.id == null) R.string.editor_add_title else R.string.editor_edit_title),
-      style = MaterialTheme.typography.headlineSmall,
-    )
-    Spacer(Modifier.height(16.dp))
+    if (showTitle) {
+      Text(text = stringResource(editorTitle(draft)), style = MaterialTheme.typography.headlineSmall)
+      Spacer(Modifier.height(16.dp))
+    }
     if (nameField != null) {
       nameField(Modifier.fillMaxWidth())
       Spacer(Modifier.height(8.dp))

@@ -269,47 +269,52 @@ fun PhotoCapture(
               }
               scratchFile = file
               try {
-                capture.takePicture(
-                  ImageCapture.OutputFileOptions.Builder(file).build(),
-                  ContextCompat.getMainExecutor(context),
-                  object : ImageCapture.OnImageSavedCallback {
-                    override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                      scope.launch {
-                        if (generation != captureGeneration) {
-                          photoStore.abandonCaptureFile(file)
-                          return@launch
-                        }
-                        photoStore.commitCaptureFile(file).fold(
-                          onSuccess = { ref ->
-                            photoStore.setActiveReview(ref)
-                            scratchFile = null
-                            capturing = false
-                            reviewRef = ref
-                            errorText = null
-                            reviewReady = false
-                            phase = PHASE_REVIEW
-                          },
-                          onFailure = {
+                // CameraX requires the main thread. The capture file is allocated by a
+                // suspending call above, so this coroutine can resume somewhere else, such as
+                // a test instrumentation thread, and the shot would throw instead of being taken.
+                withContext(Dispatchers.Main.immediate) {
+                  capture.takePicture(
+                    ImageCapture.OutputFileOptions.Builder(file).build(),
+                    ContextCompat.getMainExecutor(context),
+                    object : ImageCapture.OnImageSavedCallback {
+                      override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                        scope.launch {
+                          if (generation != captureGeneration) {
                             photoStore.abandonCaptureFile(file)
-                            scratchFile = null
-                            capturing = false
-                            errorText = context.getString(R.string.photo_capture_failed)
-                          },
-                        )
+                            return@launch
+                          }
+                          photoStore.commitCaptureFile(file).fold(
+                            onSuccess = { ref ->
+                              photoStore.setActiveReview(ref)
+                              scratchFile = null
+                              capturing = false
+                              reviewRef = ref
+                              errorText = null
+                              reviewReady = false
+                              phase = PHASE_REVIEW
+                            },
+                            onFailure = {
+                              photoStore.abandonCaptureFile(file)
+                              scratchFile = null
+                              capturing = false
+                              errorText = context.getString(R.string.photo_capture_failed)
+                            },
+                          )
+                        }
                       }
-                    }
 
-                    override fun onError(exception: ImageCaptureException) {
-                      scope.launch {
-                        photoStore.abandonCaptureFile(file)
-                        if (generation != captureGeneration) return@launch
-                        scratchFile = null
-                        capturing = false
-                        errorText = context.getString(R.string.photo_capture_failed)
+                      override fun onError(exception: ImageCaptureException) {
+                        scope.launch {
+                          photoStore.abandonCaptureFile(file)
+                          if (generation != captureGeneration) return@launch
+                          scratchFile = null
+                          capturing = false
+                          errorText = context.getString(R.string.photo_capture_failed)
+                        }
                       }
-                    }
-                  },
-                )
+                    },
+                  )
+                }
               } catch (_: SecurityException) {
                 photoStore.abandonCaptureFile(file)
                 scratchFile = null
