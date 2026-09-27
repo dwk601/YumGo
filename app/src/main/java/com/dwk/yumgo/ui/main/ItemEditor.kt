@@ -182,7 +182,7 @@ fun ItemEditor(
             sheetState = sheetState,
           )
         }
-        NavigationBarBand(reachesTheScreenEdge = !keyboardUp && barRoom > 0.dp)
+        NavigationBarBand(reachesTheScreenEdge = barRoom > 0.dp)
       }
     }
   }

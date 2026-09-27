@@ -1020,19 +1020,6 @@ class SettingsPresetWorkflowTest {
   }
 
   /**
-   * With 3-button navigation the bar belongs to the app, not the device. Checked both ways round,
-   * because the scrim and the icon appearance are two separate things and either one could follow
-   * the wrong side.
-   *
-   * Two different kinds of check live here, and they are not the same promise:
-   * - the surface under the bar is read from real pixels, so a scrim the app did not ask for fails;
-   * - the icon appearance is the flag the window requests
-   *   (isAppearanceLightNavigationBars), not a sample of the drawn icons. It says the app asked for
-   *   dark icons on a light bar; it cannot see a launcher or platform that draws them in another
-   *   colour anyway. The name says so, so nobody reads it as a visual guarantee.
-   */
-
-  /**
    * With 3-button navigation the editor still has to be reachable. The same path as the gesture
    * check below, run against the bar that is there when a launcher offers three buttons.
    */
@@ -1090,8 +1077,6 @@ class SettingsPresetWorkflowTest {
     }
   }
 
-
-
   private fun frame(): Bitmap {
     val bytes = shellBytes("screencap -p")
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: error("Could not read the screen")
@@ -1109,7 +1094,6 @@ class SettingsPresetWorkflowTest {
     shell("cmd overlay enable-exclusive $overlay")
     Thread.sleep(1_500)
   }
-
 
   /**
    * Reads the real frame and calls it light or dark by its mean brightness, which is what a person

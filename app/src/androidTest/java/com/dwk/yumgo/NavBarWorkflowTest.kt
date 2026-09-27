@@ -191,9 +191,31 @@ class NavBarWorkflowTest {
     assertSheetButtonsAreReadable(3, "a dark app on a light device")
   }
 
-  private fun assertSheetButtonsAreReadable(userRotation: Int, what: String) {
+  /**
+   * The same while somebody is typing, which is most of what the sheet is for. The keyboard owns
+   * the bar along the bottom and the app leaves it alone; a bar on a side is never covered by the
+   * keyboard, so the sheet's window still has to carry it there.
+   */
+  @Test
+  fun navigationButtons_stayReadableWithTheAddSheetOpenInLandscapeWhileTyping() {
+    setDeviceNightMode(true)
+    assertSheetButtonsAreReadable(1, "a light app on a dark device, bar on the right", typing = true)
+    assertSheetButtonsAreReadable(3, "a light app on a dark device, bar on the left", typing = true)
+
+    rotateTo(0)
+    chooseTheDarkPalette()
+    setDeviceNightMode(false)
+    assertSheetButtonsAreReadable(1, "a dark app on a light device, bar on the right", typing = true)
+    assertSheetButtonsAreReadable(3, "a dark app on a light device, bar on the left", typing = true)
+  }
+
+  private fun assertSheetButtonsAreReadable(
+    userRotation: Int,
+    what: String,
+    typing: Boolean = false,
+  ) {
     rotateTo(userRotation)
-    openTheAddSheetWithoutTheKeyboard()
+    if (typing) openTheAddSheetWithTheKeyboard() else openTheAddSheetWithoutTheKeyboard()
     assertButtonsAreReadable("the add sheet, $what")
     closeTheAddSheet()
   }
@@ -480,7 +502,11 @@ class NavBarWorkflowTest {
     }
   }
 
-  /** The bar from one frame: the colour it is painted, and the buttons standing on it. */
+  /**
+   * The bar from one frame: the colour it is painted, and the buttons standing on it. With the
+   * keyboard up it covers the bottom of the screen and paints the room below the buttons in its own
+   * tones, so a bar on a side is read above it, which is where those buttons are.
+   */
   private fun readBar(): Bar {
     val frame = frame()
     val pixels = barPixels(frame, navigationBar())
@@ -497,14 +523,16 @@ class NavBarWorkflowTest {
    * it turned. Which one it is comes from the insets the window reports, not from the shape of the
    * frame.
    */
-  private fun barPixels(frame: Bitmap, bar: Insets): List<Int> =
-    when {
+  private fun barPixels(frame: Bitmap, bar: Insets): List<Int> {
+    val keyboardTop = if (isKeyboardUp()) keyboardTop() else frame.height
+    val length = minOf(keyboardTop, frame.height) - EDGE
+    return when {
       bar.bottom >= bar.right && bar.bottom >= bar.left ->
         band(frame, frame.height - bar.bottom + EDGE, frame.height - EDGE, 0, frame.width)
-      bar.right >= bar.left ->
-        band(frame, 0, frame.height, frame.width - bar.right + EDGE, frame.width - EDGE)
-      else -> band(frame, 0, frame.height, EDGE, bar.left - EDGE)
+      bar.right >= bar.left -> band(frame, 0, length, frame.width - bar.right + EDGE, frame.width - EDGE)
+      else -> band(frame, 0, length, EDGE, bar.left - EDGE)
     }
+  }
 
   /** The paper the app paints, read in a strip just inside the bar, above the button on the right. */
   private fun appPaper(): Int {

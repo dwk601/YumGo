@@ -77,7 +77,6 @@ import com.dwk.yumgo.theme.LightColorScheme
 fun BoxScope.NavigationBarBand(reachesTheScreenEdge: Boolean = true) {
   val deviceDark = isSystemInDarkTheme()
   if (MaterialTheme.colorScheme.surface.isDark() == deviceDark) return
-  if (WindowInsets.ime.getBottom(LocalDensity.current) > 0) return
   val insets = WindowInsets.navigationBars.asPaddingValues()
   val direction = LocalLayoutDirection.current
   val left = insets.calculateLeftPadding(direction)
@@ -102,6 +101,9 @@ fun BoxScope.NavigationBarBand(reachesTheScreenEdge: Boolean = true) {
   val ltr = direction == LayoutDirection.Ltr
   val onTheBottom = bottom >= right && bottom >= left
   val onTheRight = right >= left
+  // The keyboard has the bar's room only when the bar is along the bottom. A bar on a side is
+  // never covered by the keyboard, so the sheet still has to carry it while somebody is typing.
+  if (onTheBottom && WindowInsets.ime.getBottom(LocalDensity.current) > 0) return
   val density = LocalDensity.current
   val width = with(density) { (if (onTheBottom) bottom else if (onTheRight) right else left).roundToPx() }
   if (!reachesTheScreenEdge) {
