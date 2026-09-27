@@ -138,6 +138,10 @@ fun PhotoCapture(
   var captureGeneration by remember { mutableIntStateOf(0) }
   var reviewReady by remember { mutableStateOf(false) }
   val currentReviewRef by rememberUpdatedState(onReviewRef)
+  // Read once per composition so the messages follow configuration changes, not the Context.
+  val cameraUnavailable = stringResource(R.string.photo_camera_unavailable)
+  val captureFailed = stringResource(R.string.photo_capture_failed)
+  val reviewFailed = stringResource(R.string.photo_review_failed)
 
   fun finish(result: PhotoAcquisition) {
     if (delivered.compareAndSet(false, true)) currentOnResult(result)
@@ -184,8 +188,7 @@ fun PhotoCapture(
   LaunchedEffect(phase) {
     if (phase != PHASE_STARTING) return@LaunchedEffect
     when {
-      !context.hasAnyCamera() ->
-        finish(PhotoAcquisition.Failed(context.getString(R.string.photo_camera_unavailable)))
+      !context.hasAnyCamera() -> finish(PhotoAcquisition.Failed(cameraUnavailable))
       context.hasCameraPermission() -> phase = PHASE_CAMERA
       context.shouldShowCameraRationale() -> phase = PHASE_RATIONALE
       else -> {
@@ -260,7 +263,7 @@ fun PhotoCapture(
               val file =
                 photoStore.allocateCaptureFile().getOrElse {
                   capturing = false
-                  errorText = context.getString(R.string.photo_capture_failed)
+                  errorText = captureFailed
                   return@launch
                 }
               if (generation != captureGeneration) {
@@ -297,7 +300,7 @@ fun PhotoCapture(
                               photoStore.abandonCaptureFile(file)
                               scratchFile = null
                               capturing = false
-                              errorText = context.getString(R.string.photo_capture_failed)
+                              errorText = captureFailed
                             },
                           )
                         }
@@ -309,7 +312,7 @@ fun PhotoCapture(
                           if (generation != captureGeneration) return@launch
                           scratchFile = null
                           capturing = false
-                          errorText = context.getString(R.string.photo_capture_failed)
+                          errorText = captureFailed
                         }
                       }
                     },
@@ -332,7 +335,7 @@ fun PhotoCapture(
             ref = ref,
             onDecoded = { ok ->
               reviewReady = ok
-              errorText = if (ok) null else context.getString(R.string.photo_review_failed)
+              errorText = if (ok) null else reviewFailed
             },
           )
           CaptureBar(
