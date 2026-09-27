@@ -318,6 +318,7 @@ class FridgeContentWorkflowTest {
     state = state.copy(draft = draft)
     screen = { ItemEditor(draft = draft, callbacks = callbacks, presets = presets, restored = true) }
     rule.waitForIdle()
+    assertFrameIs(widthDp = 320, heightDp = 340)
 
     rule.onNodeWithText("Premade items").assertIsDisplayed()
     rule.onNodeWithText("One tap fills the name and a date.").assertDoesNotExist()
@@ -352,6 +353,7 @@ class FridgeContentWorkflowTest {
     state = state.copy(draft = draft)
     screen = { ItemEditor(draft = draft, callbacks = callbacks, presets = presets, restored = true) }
     rule.waitForIdle()
+    assertFrameIs(widthDp = 320)
 
     // The label and its line about what a tap does are above the chips, not beside them.
     val label = rule.onNodeWithText("Premade items").assertIsDisplayed().screenBounds()
@@ -632,6 +634,18 @@ class FridgeContentWorkflowTest {
    * The frame is 320dp wide here, so that is the edge the layout has to stay inside. The full
    * window is wider, and checking against it would pass whatever the frame does.
    */
+  /**
+   * The frame really is the size a test asked for. A frame that silently stayed full width let
+   * every "320dp" check pass on the device's own width.
+   */
+  private fun assertFrameIs(widthDp: Int, heightDp: Int? = null) {
+    val bounds = rule.onNodeWithTag(FrameTag).getUnclippedBoundsInRoot()
+    assertEquals("The frame is not $widthDp dp wide: $bounds", widthDp.toFloat(), (bounds.right - bounds.left).value, 0.5f)
+    if (heightDp != null) {
+      assertEquals("The frame is not $heightDp dp tall: $bounds", heightDp.toFloat(), (bounds.bottom - bounds.top).value, 0.5f)
+    }
+  }
+
   private fun frameRight(): Float = with(rule.density) { rule.onNodeWithTag(FrameTag).getUnclippedBoundsInRoot().right.toPx() }
 
   private fun frameLeft(): Float = with(rule.density) { rule.onNodeWithTag(FrameTag).getUnclippedBoundsInRoot().left.toPx() }
