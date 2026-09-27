@@ -8,8 +8,10 @@ import android.database.sqlite.SQLiteDatabase
 import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityWindowInfo
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -20,7 +22,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextInputSelection
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.text.TextRange
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -197,6 +201,69 @@ class FridgeWorkflowTest {
       composeRule.onNodeWithText("Cold Butter").assertIsDisplayed()
       composeRule.onNode(hasContentDescription("Quantity 2"), useUnmergedTree = true).assertIsDisplayed()
     }
+  }
+
+  /**
+   * The caret belongs to the user, not to the field: an activity that is built again has to bring
+   * back the text and the place in it they were at, and the next keystroke has to land there.
+   */
+  @Test
+  fun nameCaret_comesBackWhereItWasAfterRecreation() {
+    addButton().performClick()
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Milk")
+    composeRule.waitUntil(10_000) { nodeCount("Milk") > 0 }
+    assertEquals("The caret did not follow the typing", 4, caret())
+
+    // Put the caret between the M and the ilk, the way someone fixing a typo would.
+    composeRule
+      .onNode(hasSetTextAction() and hasText("Milk", substring = true))
+      .performTextInputSelection(TextRange(1))
+    composeRule.waitUntil(5_000) { caret() == 1 }
+
+    composeRule.activity.runOnUiThread { composeRule.activity.recreate() }
+    composeRule.waitForIdle()
+    composeRule.waitUntil(15_000) { nodeCount("Milk") > 0 && nodeCount("Save") > 0 }
+    assertEquals("The caret did not come back where it was", 1, caret())
+
+    // And typing goes where the caret is, rather than at the start of the text.
+    composeRule.onNode(hasSetTextAction() and hasText("Milk", substring = true)).performTextInput("o")
+    composeRule.waitUntil(10_000) { nodeCount("Moilk") > 0 }
+    assertEquals("The text was not typed at the caret", 2, caret())
+  }
+
+  /**
+   * The add sheet's shortcuts narrow to what has been typed, and applying one fills only what the
+   * user has not decided: an empty field takes the shortcut's name and date, a typed name is left
+   * alone, and both save what the field says.
+   */
+  @Test
+  fun shortcut_fillsAnEmptyNameAndLeavesATypedOneAlone() {
+    addButton().performClick()
+    composeRule.waitUntil(15_000) { nodeCount("Premade items") > 0 }
+    // "Mi" narrows the row down to the one shortcut that starts with it.
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Mi")
+    composeRule.waitUntil(10_000) { nodeCount("Milk") > 0 }
+    composeRule.onNodeWithText("Milk").performClick()
+    composeRule.waitUntil(10_000) { nodeCount("In 7 days") > 0 }
+    val typed = composeRule.onNode(hasSetTextAction() and hasText("Name", substring = true))
+    typed.assertTextContains("Mi")
+    val spoken = typed.fetchSemanticsNode().config[SemanticsProperties.Text].map { it.text }
+    assertTrue("The shortcut took the name the user typed: $spoken", "Milk" !in spoken)
+    composeRule.onNodeWithText("Save").performClick()
+    composeRule.waitUntil(15_000) { nodeCount("Mi") > 0 }
+    composeRule.onNodeWithText("Mi").assertIsDisplayed()
+
+    // An empty field takes the shortcut's name as well as its date.
+    addButton().performClick()
+    composeRule.waitUntil(15_000) { nodeCount("Premade items") > 0 }
+    composeRule.onNodeWithText("Milk").performClick()
+    composeRule.waitUntil(10_000) { nodeCount("In 7 days") > 0 }
+    composeRule
+      .onNode(hasSetTextAction() and hasText("Name", substring = true))
+      .assertTextContains("Milk")
+    composeRule.onNodeWithText("Save").performClick()
+    composeRule.waitUntil(15_000) { nodeCount("Milk") > 0 }
+    composeRule.onNodeWithText("Milk").assertIsDisplayed()
   }
 
   /**
@@ -415,6 +482,19 @@ class FridgeWorkflowTest {
     composeRule.onNode(hasClickAction() and hasAnyDescendant(hasText("Add")), useUnmergedTree = true)
 
   private fun nodeCount(text: String): Int = composeRule.onAllNodes(hasText(text)).fetchSemanticsNodes().size
+
+  /**
+   * Where the caret sits in the name field, read from what the field publishes. A field that
+   * reports its selection at the start of the text has thrown away the place the user was at.
+   */
+  private fun caret(): Int? {
+    val range =
+      composeRule
+        .onNode(hasSetTextAction() and hasText("Name", substring = true))
+        .fetchSemanticsNode()
+        .config[SemanticsProperties.TextSelectionRange]
+    return if (range != null && range.collapsed) range.start else null
+  }
 
   private companion object {
     /** A glyph stroke well under this, and anything brighter than this is not ink. */

@@ -38,10 +38,12 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
@@ -81,6 +83,8 @@ class FridgeContentWorkflowTest {
   private var frameWidthDp by mutableIntStateOf(0)
   /** 1 is the device font scale; 2 stands in for the 200% text setting. */
   private var frameFontScale by mutableFloatStateOf(1f)
+  /** The add sheet's shortcuts. Empty unless a test is about the row they sit in. */
+  private var presets by mutableStateOf(emptyList<FoodPreset>())
   /** Swapped by a test that needs the editor laid out inside the frame rather than in its own window. */
   private var screen: (@Composable () -> Unit)? by mutableStateOf(null)
 
@@ -107,6 +111,24 @@ class FridgeContentWorkflowTest {
       },
       onPickPhoto = { events += "pick" },
       onRemovePhoto = { events += "remove-photo" },
+      // The rule the app keeps: a shortcut fills what the user has not decided, and leaves alone
+      // what they have. Only the editor's part of it is under test here.
+      onPresetSelected = { preset ->
+        events += "preset:${preset.name}"
+        val draft = state.draft
+        if (draft != null) {
+          val today = LocalDate.now().toEpochDay()
+          state =
+            state.copy(
+              draft =
+                draft.copy(
+                  name = draft.name.ifBlank { preset.name },
+                  expiryEpochDay = draft.expiryEpochDay ?: (today + preset.expiryDays),
+                  presetId = preset.id,
+                ),
+            )
+        }
+      },
     )
 
   @Before
@@ -125,6 +147,7 @@ class FridgeContentWorkflowTest {
         FridgeContent(
           state = state,
           callbacks = callbacks,
+          presets = presets,
           snackbarHost = { SnackbarHost(snackbar) },
           cameraContent = {
             BackHandler { state = state.copy(cameraOpen = false) }
@@ -193,6 +216,48 @@ class FridgeContentWorkflowTest {
     save.performClick()
     rule.waitForIdle()
     assertTrue(events.toString(), "save:Eggs" in events)
+  }
+
+  /**
+   * The shortcuts used to go away on the first keystroke, which moved the sheet under the user's
+   * finger. The lane stays, and it stays the size it was, whether or not anything matches what has
+   * been typed, and the photo section and Save are both still above the keyboard.
+   */
+  @Test
+  fun presetRow_keepsItsPlaceOnTheFirstKeystroke() {
+    presets = listOf(FoodPreset("milk", "Milk", 7), FoodPreset("eggs", "Eggs", 14))
+    state = state.copy(items = listOf(FridgeItemUi("leftovers", "Leftovers", 1, null, null)))
+    addButton().performClick()
+    rule.waitUntil(5_000) {
+      rule.onAllNodes(hasSetTextAction() and hasText("Name") and isFocused()).fetchSemanticsNodes().isNotEmpty()
+    }
+    // The keyboard raises as the sheet opens, and a window that changes size moves everything in
+    // it, so it is settled before the first measurement is taken.
+    val imeTop = awaitImeTop()
+    val label = rule.onNodeWithText("Premade items").assertIsDisplayed().screenBounds()
+    val quantity = rule.onNodeWithText("Quantity").assertIsDisplayed().screenBounds()
+    val save = rule.onNodeWithText("Save").assertIsDisplayed().screenBounds()
+
+    // A keystroke that matches no shortcut is the one that used to collapse the row.
+    rule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Z")
+    rule.waitForIdle()
+    screenshot("preset-row-typed")
+
+    val labelAfter = rule.onNodeWithText("Premade items").assertIsDisplayed().screenBounds()
+    val quantityAfter = rule.onNodeWithText("Quantity").assertIsDisplayed().screenBounds()
+    val saveAfter = rule.onNodeWithText("Save").assertIsDisplayed().screenBounds()
+    assertEquals("The shortcuts row moved from $label to $labelAfter", label.top, labelAfter.top, HalfPixel)
+    assertEquals("The row lost its height: quantity went from $quantity to $quantityAfter", quantity.top, quantityAfter.top, HalfPixel)
+    assertEquals("The sheet jumped: Save went from $save to $saveAfter", save.top, saveAfter.top, HalfPixel)
+    // Nothing matches "Z", and the lane says so instead of emptying itself out of the sheet.
+    rule.onNodeWithText("No premade item starts with that.").assertIsDisplayed()
+    rule.onNodeWithText("Milk").assertDoesNotExist()
+
+    // Save is still above the keyboard, and so is the photo section below it.
+    val saveNow = rule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().screenBounds()
+    assertTrue("Save bottom ${saveNow.bottom} is under the keyboard top $imeTop", saveNow.bottom <= imeTop)
+    val take = rule.onNodeWithText("Take photo").performScrollTo().assertIsDisplayed().screenBounds()
+    assertTrue("Take photo bottom ${take.bottom} is under the keyboard top $imeTop", take.bottom <= imeTop)
   }
 
   @Test
@@ -314,6 +379,37 @@ class FridgeContentWorkflowTest {
   /** Add FAB located through its visible label, independent of how its semantics are merged. */
   private fun addButton(): SemanticsNodeInteraction =
     rule.onNode(hasClickAction() and hasAnyDescendant(hasText("Add")), useUnmergedTree = true)
+
+  /**
+   * What the editor's quantity buttons are announced as. With nothing typed yet, the old wording
+   * read the field's own label as if it were the food: "Decrease quantity of Name". It should
+   * simply say what the buttons do. A row in the fridge still names its food, so a fix that
+   * dropped the name everywhere would be caught here too.
+   */
+  @Test
+  fun editorStepper_isLabelledPlainlyWhileTheNameIsEmpty() {
+    state =
+      state.copy(
+        items = listOf(FridgeItemUi("milk", "Milk", 2, null, null)),
+        draft = ItemDraft(null, "", 1, null, null),
+      )
+    rule.waitForIdle()
+
+    rule.onNodeWithContentDescription("Decrease quantity", useUnmergedTree = true).assertExists()
+    rule.onNodeWithContentDescription("Increase quantity", useUnmergedTree = true).assertExists()
+    // The field's own label is not a food, and must not be announced as one.
+    assertTrue(
+      "A button is still announced with the field's label as if it were a food",
+      rule
+        .onAllNodes(hasContentDescription("quantity of Name", substring = true), useUnmergedTree = true)
+        .fetchSemanticsNodes()
+        .isEmpty(),
+    )
+
+    // A saved row keeps naming its food, so the plain wording is only for an unnamed draft.
+    rule.onNodeWithContentDescription("Increase quantity of Milk", useUnmergedTree = true).assertExists()
+    rule.onNodeWithContentDescription("Decrease quantity of Milk", useUnmergedTree = true).assertExists()
+  }
 
   /**
    * A 320dp window at 200% text: the expiry label, its date, and both actions have to stack and
@@ -506,5 +602,7 @@ class FridgeContentWorkflowTest {
   private companion object {
     const val CAMERA_SLOT = "Camera slot"
     const val FrameTag = "t5-frame"
+    /** Bounds are in pixels, so a row that did not move can still round to the next one. */
+    const val HalfPixel = 0.5f
   }
 }
