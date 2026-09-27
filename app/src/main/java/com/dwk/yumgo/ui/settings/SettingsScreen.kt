@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
@@ -153,13 +154,21 @@ private fun SettingsContent(
   // Scaffold hands out the safe drawing insets, so this is the one place the navigation bar is asked
   // for again, and it is asked for before those insets are consumed.
   val bottomRoom = WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)
+  val shortWindow = LocalConfiguration.current.screenHeightDp <= ShortWindowHeightDp
 
   // Bring the open editor into the room the keyboard leaves. Runs when a field takes focus and
   // whenever that room changes, all after composition, so the requesters are attached before they
   // are used. The reveal that belongs to opening the editor waits for the card to stop growing,
   // in [PresetCard], because the card is not laid out yet at this point.
   LaunchedEffect(editor.focusedField, room.intValue) {
-    if (state.editing != null) editor.reveal()
+    if (state.editing == null) return@LaunchedEffect
+    // The room is read from the list as it was laid out, so a reveal taken in the same frame is
+    // measured against the room before this one. A keyboard moving at the end of its animation
+    // changes the room by about ten pixels a frame, and in landscape that is the difference
+    // between the Save button clear of the keyboard and ten pixels of it under: the last reveal
+    // has to be the one that waits for the frame the new room is measured in.
+    awaitFrames()
+    editor.reveal()
   }
 
   // Nothing is in focus once the editor is closed, so the next one starts on its name field.
@@ -174,15 +183,35 @@ private fun SettingsContent(
     // The keyboard is handled by the list below, not here, so the room is never counted twice.
     contentWindowInsets = WindowInsets.safeDrawing.exclude(WindowInsets.ime),
     topBar = {
-      TopAppBar(
-        title = { Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.titleLarge) },
-        navigationIcon = {
-          IconButton(onClick = callbacks.onBack) {
-            Icon(SettingsBack, contentDescription = stringResource(R.string.settings_back))
+      val title = stringResource(R.string.settings_title)
+      val back = stringResource(R.string.settings_back)
+      if (shortWindow) {
+        // A phone on its side, where a 64dp title bar is a fifth of what the keyboard leaves, and
+        // the editor needs every pixel of what is left to keep the field being typed into and the
+        // button that saves it on screen together. The same bar in less of it: the back control and
+        // the title, at the compact height.
+        Surface(color = MaterialTheme.colorScheme.background) {
+          Row(
+            modifier =
+              Modifier.fillMaxWidth().height(CompactBarHeightDp)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            IconButton(onClick = callbacks.onBack) { Icon(SettingsBack, contentDescription = back) }
+            Text(text = title, style = MaterialTheme.typography.titleMedium)
           }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
-      )
+        }
+      } else {
+        TopAppBar(
+          title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+          navigationIcon = {
+            IconButton(onClick = callbacks.onBack) {
+              Icon(SettingsBack, contentDescription = back)
+            }
+          },
+          colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+        )
+      }
     },
   ) { innerPadding ->
     LazyColumn(
@@ -655,9 +684,13 @@ private suspend fun awaitFrames(frames: Int = 3) {
 
 /**
  * The compact-height boundary, the same 480dp the Material window size classes use. Below it the
- * window is a phone on its side, where the editor tightens itself to keep Save on the screen.
+ * window is a phone on its side, where the editor tightens itself and the title bar is a compact
+ * one to keep Save on the screen.
  */
 private const val ShortWindowHeightDp = 480
+
+/** How tall the title bar is in a short window, where a fifth of the screen cannot be a bar. */
+private val CompactBarHeightDp = 48.dp
 
 /** Attaches a requester when there is one, so an unfocused field is left alone. */
 private fun Modifier.bringIntoViewWhen(request: BringIntoViewRequester?): Modifier =
