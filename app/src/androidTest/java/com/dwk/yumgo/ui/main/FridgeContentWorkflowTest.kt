@@ -8,7 +8,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -81,6 +83,8 @@ class FridgeContentWorkflowTest {
   private val snackbar = SnackbarHostState()
   /** 0 leaves the surface full width; a value narrows the window the way a small phone would. */
   private var frameWidthDp by mutableIntStateOf(0)
+  /** 0 leaves the surface full height; a value is the height left for it, keyboard and all. */
+  private var frameHeightDp by mutableIntStateOf(0)
   /** 1 is the device font scale; 2 stands in for the 200% text setting. */
   private var frameFontScale by mutableFloatStateOf(1f)
   /** The add sheet's shortcuts. Empty unless a test is about the row they sit in. */
@@ -111,8 +115,6 @@ class FridgeContentWorkflowTest {
       },
       onPickPhoto = { events += "pick" },
       onRemovePhoto = { events += "remove-photo" },
-      // The rule the app keeps: a shortcut fills what the user has not decided, and leaves alone
-      // what they have. Only the editor's part of it is under test here.
       // The rule the app keeps: a shortcut fills what the user has not decided, finishes a name they
       // have only started, and leaves alone a name they typed whole.
       onPresetSelected = { preset ->
@@ -160,11 +162,14 @@ class FridgeContentWorkflowTest {
         )
       }
       CompositionLocalProvider(LocalDensity provides Density(base.density, frameFontScale)) {
+        // The size comes before the fill, or a fill's own minimum wins and the frame stays full
+        // width whatever the test asked for: a fill measures its child with min = max, and a width
+        // after it can only be coerced inside those bounds.
         Box(
           Modifier
-            .fillMaxSize()
             .testTag(FrameTag)
-            .then(if (frameWidthDp > 0) Modifier.width(frameWidthDp.dp) else Modifier),
+            .then(if (frameWidthDp > 0) Modifier.width(frameWidthDp.dp) else Modifier.fillMaxWidth())
+            .then(if (frameHeightDp > 0) Modifier.height(frameHeightDp.dp) else Modifier.fillMaxHeight()),
         ) {
           YumgoTheme { (screen ?: fridge)() }
         }
@@ -246,6 +251,7 @@ class FridgeContentWorkflowTest {
     // it, so it is settled before the first measurement is taken.
     val imeTop = awaitImeTop()
     val label = rule.onNodeWithText("Premade items").assertIsDisplayed().screenBounds()
+    // Nothing is written yet, so a tap has both fields to fill and the line says so.
     val helper = rule.onNodeWithText("One tap fills the name and a date.").assertIsDisplayed().screenBounds()
     val milk = rule.onNodeWithText("Milk").assertIsDisplayed().screenBounds()
     val quantity = rule.onNodeWithText("Quantity").assertIsDisplayed().screenBounds()
@@ -264,7 +270,8 @@ class FridgeContentWorkflowTest {
     rule.waitForIdle()
     screenshot("preset-lane-typed")
     val labelAfter = rule.onNodeWithText("Premade items").assertIsDisplayed().screenBounds()
-    val helperAfter = rule.onNodeWithText("One tap fills the name and a date.").assertIsDisplayed().screenBounds()
+    // The line changes its words, and the lane has to keep the same height to say it.
+    val helperAfter = rule.onNodeWithText("One tap sets the date.").assertIsDisplayed().screenBounds()
     val milkAfter = rule.onNodeWithText("Milk").assertIsDisplayed().screenBounds()
     val quantityAfter = rule.onNodeWithText("Quantity").assertIsDisplayed().screenBounds()
     val saveAfter = rule.onNodeWithText("Save").assertIsDisplayed().screenBounds()
@@ -275,7 +282,10 @@ class FridgeContentWorkflowTest {
     assertEquals("The sheet jumped: Save went from $save to $saveAfter", save.top, saveAfter.top, HalfPixel)
 
     // "Z" is not the start of a shortcut, so the lane leaves the whole list standing: narrowing it
-    // to chips a tap could not finish would promise something a tap does not keep.
+    // to chips a tap could not finish would promise something a tap does not keep. And a name the
+    // user wrote whole is one a tap must not touch, so the line changes to the truth about it.
+    rule.onNodeWithText("One tap sets the date.").assertIsDisplayed()
+    rule.onNodeWithText("One tap fills the name and a date.").assertDoesNotExist()
     rule.onNodeWithText("Milk").assertIsDisplayed()
     rule.onNodeWithText("Salad greens", useUnmergedTree = true).assertExists()
     // And the shortcut is still one tap, which is the whole reason it is there.
@@ -289,6 +299,38 @@ class FridgeContentWorkflowTest {
     assertTrue("Save bottom ${saveNow.bottom} is under the keyboard top $imeTop", saveNow.bottom <= imeTop)
     val take = rule.onNodeWithText("Take photo").performScrollTo().assertIsDisplayed().screenBounds()
     assertTrue("Take photo bottom ${take.bottom} is under the keyboard top $imeTop", take.bottom <= imeTop)
+  }
+
+  /**
+   * A sheet with no height to spare, which is a small window with the keyboard up or a landscape
+   * one: the line under the shortcut label only repeats what the chips already say, so it goes and
+   * the expiry and photo sections get the height instead. They still scroll into view and work.
+   */
+  @Test
+  fun shortSheet_dropsTheHintAndKeepsTheSectionsReachable() {
+    // 340dp is what is left of a 320dp-by-200%-text phone once the keyboard is up, and the hint
+    // cannot afford it there.
+    frameWidthDp = 320
+    frameHeightDp = 340
+    frameFontScale = 2f
+    presets = listOf(FoodPreset("milk", "Milk", 7), FoodPreset("eggs", "Eggs", 14))
+    val draft = ItemDraft(null, "", 1, null, null)
+    state = state.copy(draft = draft)
+    screen = { ItemEditor(draft = draft, callbacks = callbacks, presets = presets, restored = true) }
+    rule.waitForIdle()
+
+    rule.onNodeWithText("Premade items").assertIsDisplayed()
+    rule.onNodeWithText("One tap fills the name and a date.").assertDoesNotExist()
+    // The shortcuts themselves are not what goes: they are one tap, and they are the top of the
+    // sheet rather than something the user has to scroll to find.
+    rule.onNodeWithText("Milk").assertIsDisplayed()
+    rule.onNodeWithText("Save").assertIsDisplayed()
+
+    // The parts that scroll are still whole when they get there, and still inside the window.
+    val choose = rule.onNodeWithText("Choose expiry date").performScrollTo().assertIsDisplayed().screenBounds()
+    val take = rule.onNodeWithText("Take photo").performScrollTo().assertIsDisplayed().screenBounds()
+    assertTrue("The expiry action runs off the window: $choose", choose.right <= frameRight())
+    assertTrue("The photo actions run off the window: $take", take.right <= frameRight())
   }
 
   /**

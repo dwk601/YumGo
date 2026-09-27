@@ -243,15 +243,19 @@ class FridgeWorkflowTest {
     composeRule.waitUntil(15_000) { nodeCount("Premade items") > 0 }
     val name = composeRule.onNode(hasSetTextAction() and hasText("Name", substring = true))
 
-    // "Mi" narrows the lane to the one shortcut it can finish, and the tap finishes it.
+    // "Mi" narrows the lane to the one shortcut it can finish, and the line says a tap fills both.
+    composeRule.onNodeWithText("One tap fills the name and a date.").assertIsDisplayed()
     name.performTextInput("Mi")
     composeRule.waitUntil(10_000) { nodeCount("Milk") > 0 }
     composeRule.onNodeWithText("Milk").performClick()
     composeRule.waitUntil(10_000) { nodeCount("In 7 days") > 0 }
     name.assertTextContains("Milk")
 
-    // A name of their own is not replaced by a shortcut, and the date is filled under it.
+    // A name of their own is not replaced by a shortcut, and the date is filled under it. The line
+    // changes with it: a tap can only give them the date now, and it must not claim otherwise.
     name.performTextReplacement("Kale")
+    composeRule.onNodeWithText("One tap sets the date.").assertIsDisplayed()
+    composeRule.onNodeWithText("One tap fills the name and a date.").assertDoesNotExist()
     composeRule.onNodeWithText("Clear expiry date").performClick()
     composeRule.waitUntil(10_000) { nodeCount("No expiry") > 0 }
     composeRule.onNodeWithText("Milk").performClick()
@@ -259,20 +263,17 @@ class FridgeWorkflowTest {
     val spoken = name.spoken()
     assertTrue("The shortcut took a name the user typed whole: $spoken", "Kale" in spoken)
     assertTrue("The shortcut took a name the user typed whole: $spoken", "Milk" !in spoken)
-    assertTrue("The shortcut took a name the user typed whole: $spoken", "Milk" !in spoken)
     composeRule.onNodeWithText("Save").performClick()
     composeRule.waitUntil(15_000) { nodeCount("Kale") > 0 }
     composeRule.onNodeWithText("Kale").assertIsDisplayed()
     composeRule.onNodeWithText("In 7 days").assertIsDisplayed()
 
-    // An empty field takes the shortcut's name as well as its date.
+    // An empty field takes the shortcut's name as well as its date. The wait is on the field,
+    // because a saved item shows its own date and the card would answer for the editor.
     addButton().performClick()
     composeRule.waitUntil(15_000) { nodeCount("Premade items") > 0 }
     composeRule.onNodeWithText("Milk").performClick()
-    composeRule.waitUntil(10_000) { nodeCount("In 7 days") > 0 }
-    composeRule
-      .onNode(hasSetTextAction() and hasText("Name", substring = true))
-      .assertTextContains("Milk")
+    composeRule.waitUntil(10_000) { name.spoken().contains("Milk") }
     composeRule.onNodeWithText("Save").performClick()
     composeRule.waitUntil(15_000) { nodeCount("Milk") > 0 }
     composeRule.onNodeWithText("Milk").assertIsDisplayed()

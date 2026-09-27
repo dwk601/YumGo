@@ -376,6 +376,11 @@ private fun EditorBody(
   }
 
   BoxWithConstraints(Modifier.fillMaxWidth()) {
+    // A short sheet, whether that is a landscape window or a small one with the keyboard up, does
+    // not spend its height on a line that only repeats what the chips already say. The pinned part
+    // of a tall editor is about [PinnedHeightDp], and below that plus a section worth scrolling,
+    // the hint goes and the expiry and photo sections get the room instead.
+    val showPresetHint = maxHeight >= HintRoomHeightDp
     Column(Modifier.fillMaxWidth().heightIn(max = maxHeight)) {
       // A tall window has height to spare above the scrolling part, and it spends it on the title
       // and the shortcuts: pinned, the lane is the same size before the first keystroke and after
@@ -396,6 +401,7 @@ private fun EditorBody(
             selectedId = draft.presetId,
             enabled = !draft.saving,
             onPreset = callbacks.onPresetSelected,
+            showHint = showPresetHint,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
           )
           Spacer(Modifier.height(4.dp))
@@ -422,6 +428,7 @@ private fun EditorBody(
         // In a tall window the shortcuts are already pinned above, so the scrolling part starts at
         // the quantity; in a short one there was no room to pin them, so they scroll with the rest.
         presets = if (compact) presets else emptyList(),
+        showPresetHint = showPresetHint,
         modifier = Modifier.weight(1f, fill = false).editorScroll(scroll) { viewportBottom = it },
         onPickDate = { pickingDate = true },
         onMessageBounds = { messageBottom = it },
@@ -457,6 +464,7 @@ private fun EditorFields(
   draft: ItemDraft,
   callbacks: FridgeCallbacks,
   presets: List<FoodPreset>,
+  showPresetHint: Boolean,
   modifier: Modifier = Modifier,
   onPickDate: () -> Unit,
   onMessageBounds: (Float) -> Unit,
@@ -471,6 +479,7 @@ private fun EditorFields(
         selectedId = draft.presetId,
         enabled = !draft.saving,
         onPreset = callbacks.onPresetSelected,
+        showHint = showPresetHint,
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
       )
       Spacer(Modifier.height(8.dp))
@@ -579,6 +588,9 @@ private fun SaveButton(
  * the name, because a lane narrowed to something a tap cannot complete reads as a promise it does
  * not keep. A name that is already a shortcut's own leaves the whole list standing, so one
  * shortcut can be swapped for another.
+ *
+ * [showHint] is the caller's call: a sheet with no height to spare leaves the line out rather than
+ * take room from the sections that scroll.
  */
 @Composable
 private fun PresetLane(
@@ -587,20 +599,31 @@ private fun PresetLane(
   selectedId: String?,
   enabled: Boolean,
   onPreset: (FoodPreset) -> Unit,
+  showHint: Boolean,
   modifier: Modifier = Modifier,
 ) {
   val name = typed.trim()
   val completions = presets.filter { it.completes(name) }
   val named = presets.any { it.name.equals(name, ignoreCase = true) }
-  val shown = if (completions.isEmpty() || named) presets else completions
+  val narrowed = completions.isNotEmpty() && !named
+  val shown = if (narrowed) completions else presets
   Column(modifier) {
     Text(text = stringResource(R.string.editor_presets_label), style = MaterialTheme.typography.labelLarge)
-    Text(
-      text = stringResource(R.string.editor_presets_hint),
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-      modifier = Modifier.padding(top = 2.dp),
-    )
+    if (showHint) {
+      // The line says what a tap does, so it has to be true: every chip in view finishes the name
+      // while the user is part way through one, and a name they wrote whole is left alone, which
+      // leaves the date as the only thing a tap can give them.
+      Text(
+        text =
+          stringResource(
+            if (narrowed || name.isEmpty()) R.string.editor_presets_hint
+            else R.string.editor_presets_hint_date,
+          ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 2.dp),
+      )
+    }
     Spacer(Modifier.height(4.dp))
     // The chips scroll, and both ends fade into the sheet rather than slicing a chip in half. A
     // chip cut off by an edge reads as something broken, not as more to come.
@@ -835,6 +858,16 @@ private const val RevealWaitMillis = 1_500L
 
 /** How wide the fade at the ends of the shortcut lane is, and the gap it needs to fade into. */
 private val EdgeFadeWidthDp = 16.dp
+
+/** Roughly what the title, the shortcut lane and the name with Save take up when they are pinned. */
+private val PinnedHeightDp = 250.dp
+
+/**
+ * The height a sheet needs before the shortcut hint is worth a line: the pinned part, plus a
+ * scrolling part tall enough for a whole section. Below that, a small window with the keyboard up
+ * or a landscape one would be showing the hint instead of the expiry and photo rows.
+ */
+private val HintRoomHeightDp = PinnedHeightDp + 130.dp
 
 /** Frames the scroll range must hold still before the editor scrolls to a photo problem. */
 private const val SettledFrames = 3
