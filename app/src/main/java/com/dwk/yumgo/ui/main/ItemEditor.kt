@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -68,6 +67,7 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,7 +76,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
@@ -85,6 +84,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalFocusManager
@@ -149,16 +149,16 @@ fun ItemEditor(
 }
 
 /**
- * True when the window is too short for the tall editor, which is what landscape with the
- * keyboard open leaves behind. It is read from the window rather than the sheet, because the
- * sheet measures itself while it animates and would flip the layout under the user.
+ * True when the window is too short for the tall editor, which is every phone in landscape.
+ *
+ * The decision is the window height alone and never the keyboard: a layout that changed when the
+ * keyboard opened would move the focused field between two places, lose it, and close the
+ * keyboard again. The sheet is asked to fit into the height the window already has.
  */
 @Composable
 private fun compactEditor(): Boolean {
   val screenHeight = LocalConfiguration.current.screenHeightDp
-  val density = LocalDensity.current
-  val keyboardDp = with(density) { WindowInsets.ime.getBottom(density).toDp() }.value.roundToInt()
-  return remember(screenHeight, keyboardDp) { screenHeight - keyboardDp < CompactRoomDp }
+  return remember(screenHeight) { screenHeight < CompactWindowHeightDp }
 }
 
 /** The handle is decorative, so a short window gets a short one. */
@@ -255,12 +255,35 @@ private fun EditorBody(
   var pickingDate by rememberSaveable { mutableStateOf(false) }
   var didAutofocus by remember(draft.id) { mutableStateOf(false) }
   val canSave = draft.name.isNotBlank() && !draft.saving
+  // One field, one composition. Whichever layout is showing calls the same movable content, so a
+  // layout that changes under a live editor moves the field instead of rebuilding it, and the
+  // field keeps its focus, its text, and the keyboard the user opened.
+  val nameFocused = remember { mutableStateOf(false) }
+  val nameField = remember {
+    // The draft travels as a parameter, not captured: a movable content keeps one composition, so
+    // a captured value would stay at whatever it was when the content was created.
+    movableContentOf { fieldDraft: ItemDraft, fieldCanSave: Boolean, fieldModifier: Modifier ->
+      NameField(
+        draft = fieldDraft,
+        focus = focus,
+        enabled = !fieldDraft.saving,
+        canSave = fieldCanSave,
+        callbacks = callbacks,
+        modifier = fieldModifier.onFocusChanged { nameFocused.value = it.isFocused },
+      )
+    }
+  }
   LaunchedEffect(draft.id, requestFocus, windowFocused, sheetReady) {
     if (requestFocus && draft.id == null && !didAutofocus && windowFocused && sheetReady) {
       focus.requestFocus()
       keyboard?.show()
       didAutofocus = true
     }
+  }
+  // Belt and braces: if the layout moves while the field holds focus, take it back rather than
+  // leave the user with a field they cannot type into.
+  LaunchedEffect(compact) {
+    if (nameFocused.value) focus.requestFocus()
   }
   // A photo problem is the last thing telling the user they can still type, and the keyboard can
   // leave the photo section below the fold, so the editor scrolls it into view. The scroll
@@ -291,14 +314,7 @@ private fun EditorBody(
           modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          NameField(
-            draft = draft,
-            focus = focus,
-            enabled = !draft.saving,
-            canSave = canSave,
-            callbacks = callbacks,
-            modifier = Modifier.weight(1f),
-          )
+          nameField(draft, canSave, Modifier.weight(1f))
           Spacer(Modifier.width(12.dp))
           SaveButton(
             draft = draft,
@@ -321,8 +337,7 @@ private fun EditorBody(
           draft = draft,
           callbacks = callbacks,
           presets = presets,
-          focus = focus,
-          canSave = canSave,
+          nameField = { fieldModifier -> nameField(draft, canSave, fieldModifier) },
           modifier = Modifier.weight(1f, fill = false).editorScroll(scroll) { viewportBottom = it },
           onPickDate = { pickingDate = true },
           onMessageBounds = { messageBottom = it },
@@ -357,9 +372,8 @@ private fun Modifier.editorScroll(scroll: ScrollState, onViewportBottom: (Float)
     .onGloballyPositioned { onViewportBottom(it.boundsInWindow().bottom) }
 
 /**
- * The scrolling part of the editor, from the title down to Remove. With [focus] it also carries
- * the name field, which is how the tall layout works; in a short window the field is pinned
- * beside Save instead and this column starts under it.
+ * The scrolling part of the editor, from the title down to Remove. [nameField] is the editor's
+ * one text field, handed in so that both layouts place the same instance.
  */
 @Composable
 private fun EditorFields(
@@ -367,9 +381,7 @@ private fun EditorFields(
   callbacks: FridgeCallbacks,
   presets: List<FoodPreset>,
   modifier: Modifier = Modifier,
-  focus: FocusRequester? = null,
-  canSave: Boolean = false,
-  onPickDate: () -> Unit,
+  nameField: (@Composable (Modifier) -> Unit)? = null,  onPickDate: () -> Unit,
   onMessageBounds: (Float) -> Unit,
 ) {
   Column(modifier) {
@@ -378,15 +390,8 @@ private fun EditorFields(
       style = MaterialTheme.typography.headlineSmall,
     )
     Spacer(Modifier.height(16.dp))
-    if (focus != null) {
-      NameField(
-        draft = draft,
-        focus = focus,
-        enabled = !draft.saving,
-        canSave = canSave,
-        callbacks = callbacks,
-        modifier = Modifier.fillMaxWidth(),
-      )
+    if (nameField != null) {
+      nameField(Modifier.fillMaxWidth())
       Spacer(Modifier.height(8.dp))
     }
     // The shortcuts are the fast path for the first choice. Once the name is the user's own
@@ -687,10 +692,11 @@ private fun ExpiryDialog(epochDay: Long?, onConfirm: (Long?) -> Unit, onDismiss:
 private fun <T> motionFade(): FiniteAnimationSpec<T> = MaterialTheme.motionScheme.fastEffectsSpec()
 
 /**
- * Window height, keyboard included, below which the editor drops its title and puts the name
- * field beside Save. Landscape with a keyboard open is the case that needs it.
+ * Window height below which the editor is the short one. It sits above every phone in landscape
+ * (360 to 430dp) and below every phone in portrait (640dp and up), so a rotation is the only
+ * thing that moves a live editor between the two layouts.
  */
-private val CompactRoomDp = 320
+private const val CompactWindowHeightDp = 480
 
 /** How long the editor waits for the sheet to be measured before revealing a photo problem. */
 private const val RevealWaitMillis = 1_500L
