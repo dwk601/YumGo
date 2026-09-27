@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
@@ -185,33 +184,21 @@ private fun SettingsContent(
     topBar = {
       val title = stringResource(R.string.settings_title)
       val back = stringResource(R.string.settings_back)
-      if (shortWindow) {
-        // A phone on its side, where a 64dp title bar is a fifth of what the keyboard leaves, and
-        // the editor needs every pixel of what is left to keep the field being typed into and the
-        // button that saves it on screen together. The same bar in less of it: the back control and
-        // the title, at the compact height.
-        Surface(color = MaterialTheme.colorScheme.background) {
-          Row(
-            modifier =
-              Modifier.fillMaxWidth().height(CompactBarHeightDp)
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            IconButton(onClick = callbacks.onBack) { Icon(SettingsBack, contentDescription = back) }
-            Text(text = title, style = MaterialTheme.typography.titleMedium)
+      TopAppBar(
+        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+        navigationIcon = {
+          IconButton(onClick = callbacks.onBack) {
+            Icon(SettingsBack, contentDescription = back)
           }
-        }
-      } else {
-        TopAppBar(
-          title = { Text(title, style = MaterialTheme.typography.titleLarge) },
-          navigationIcon = {
-            IconButton(onClick = callbacks.onBack) {
-              Icon(SettingsBack, contentDescription = back)
-            }
-          },
-          colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
-        )
-      }
+        },
+        // The stock bar, in less of it. A phone on its side gives the keyboard half the window,
+        // and a 64dp title bar is a fifth of what is left, which is the difference between the
+        // field being typed into and the button that saves it fitting together above the keyboard
+        // and Save sitting under it. The bar still carries its own insets and its 48dp back
+        // target, which is what makes the control a finger can reach with a bar on either side.
+        expandedHeight = if (shortWindow) CompactBarHeight else TopAppBarDefaults.TopAppBarExpandedHeight,
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+      )
     },
   ) { innerPadding ->
     LazyColumn(
@@ -689,8 +676,8 @@ private suspend fun awaitFrames(frames: Int = 3) {
  */
 private const val ShortWindowHeightDp = 480
 
-/** How tall the title bar is in a short window, where a fifth of the screen cannot be a bar. */
-private val CompactBarHeightDp = 48.dp
+/** How tall the title bar's content is in a short window, where a fifth of the screen cannot be a bar. */
+private val CompactBarHeight = 48.dp
 
 /** Attaches a requester when there is one, so an unfocused field is left alone. */
 private fun Modifier.bringIntoViewWhen(request: BringIntoViewRequester?): Modifier =
