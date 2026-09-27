@@ -72,6 +72,11 @@ data class ItemDraft(
    * the user edits the name or the date, so a filled draft is never silently reset.
    */
   val presetId: String? = null,
+  /**
+   * True while the name in this draft is the preset's own rather than something the user wrote. A
+   * tap on another preset may replace that name, which is what the shortcut hint says it does.
+   */
+  val nameFromPreset: Boolean = false,
 )
 
 /**

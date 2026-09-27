@@ -103,7 +103,10 @@ class FridgeContentWorkflowTest {
       onEdit = { events += "edit:$it" },
       onQuantityChange = { id, q -> events += "qty:$id:$q" },
       onDelete = { events += "delete:$it" },
-      onDraftChange = { state = state.copy(draft = it) },
+      onDraftChange = { changed ->
+        val before = state.draft
+        state = state.copy(draft = changed.copy(nameFromPreset = if (before?.name != changed.name) false else changed.nameFromPreset))
+      },
       onDismissEditor = {
         events += "dismiss"
         state = state.copy(draft = null)
@@ -131,6 +134,7 @@ class FridgeContentWorkflowTest {
                   name = if (keepName) draft.name else preset.name,
                   expiryEpochDay = draft.expiryEpochDay ?: (today + preset.expiryDays),
                   presetId = preset.id,
+                  nameFromPreset = !keepName,
                 ),
             )
         }
@@ -302,23 +306,67 @@ class FridgeContentWorkflowTest {
   }
 
   /**
+   * The same steady lane at 200% text in a 320dp window, where one of the line's two wordings
+   * wraps and the other does not. The lane holds the height of the taller one, so the first
+   * keystroke changes the words and nothing else: a hint that resized would move the chips, the
+   * name field and Save under the user's finger, which is the jump the steady lane is for.
+   */
+  @Test
+  fun narrowWindowAtLargeText_keepsTheLaneSteadyThroughTheWordingChange() {
+    // 880dp of frame is about 808dp for the editor, which is over the 760dp a sheet needs at
+    // twice the text size for the line to be there at all: the case the jump showed up in.
+    frameWidthDp = 320
+    frameHeightDp = 880
+    frameFontScale = 2f
+    presets = listOf(FoodPreset("milk", "Milk", 7), FoodPreset("eggs", "Eggs", 14))
+    val draft = ItemDraft(null, "", 1, null, null)
+    state = state.copy(draft = draft)
+    // The editor reads the draft the callbacks keep, because this test types into it.
+    screen = { ItemEditor(draft = state.draft ?: draft, callbacks = callbacks, presets = presets, restored = true) }
+    rule.waitForIdle()
+    assertFrameIs(widthDp = 320, heightDp = 880)
+
+    // An empty field, so the line is the one that promises a tap fills both fields. The rest of the
+    // sheet is where it has to land, because the line holds the height of its own taller wording.
+    val label = rule.onNodeWithText("Premade items").assertIsDisplayed().screenBounds()
+    val hint = rule.onNodeWithText("One tap fills the name and a date.").assertIsDisplayed().screenBounds()
+    val milk = rule.onNodeWithText("Milk").assertIsDisplayed().screenBounds()
+    val name = rule.onNode(hasSetTextAction() and hasText("Name")).assertIsDisplayed().screenBounds()
+    val save = rule.onNodeWithText("Save").assertIsDisplayed().screenBounds()
+
+    // A whole name the user wrote is the point at which the words change to the shorter line. The
+    // draft is set the way a keystroke sets it, rather than by typing: a keyboard would close the
+    // window this frame is sized against, and the window is not what is under test here.
+    callbacks.onDraftChange(state.draft!!.copy(name = "Kale"))
+    rule.waitForIdle()
+    val shortHint = rule.onNodeWithText("One tap sets the date.").assertIsDisplayed().screenBounds()
+    assertEquals("The line changed its height from $hint to $shortHint", hint.height, shortHint.height, HalfPixel)
+    assertEquals("The lane moved from $label", label.top, rule.onNodeWithText("Premade items").assertIsDisplayed().screenBounds().top, HalfPixel)
+    assertEquals("The chips moved from $milk", milk.top, rule.onNodeWithText("Milk").assertIsDisplayed().screenBounds().top, HalfPixel)
+    assertEquals("The name field moved from $name", name.top, rule.onNode(hasSetTextAction() and hasText("Name")).assertIsDisplayed().screenBounds().top, HalfPixel)
+    assertEquals("Save moved from $save", save.top, rule.onNodeWithText("Save").assertIsDisplayed().screenBounds().top, HalfPixel)
+  }
+
+  /**
    * A sheet with no height to spare, which is a small window with the keyboard up or a landscape
    * one: the line under the shortcut label only repeats what the chips already say, so it goes and
    * the expiry and photo sections get the height instead. They still scroll into view and work.
    */
   @Test
   fun shortSheet_dropsTheHintAndKeepsTheSectionsReachable() {
-    // 340dp is what is left of a 320dp-by-200%-text phone once the keyboard is up, and the hint
-    // cannot afford it there.
+    // A 320dp window at 200% text has about 476dp left above the keyboard, and the editor's own
+    // surface takes the system insets out of whatever frame it is given, so the frame is that plus
+    // the insets. Well under the 760dp a sheet needs at twice the text size, so the line goes and
+    // the sections that scroll get the height.
     frameWidthDp = 320
-    frameHeightDp = 340
+    frameHeightDp = 548
     frameFontScale = 2f
     presets = listOf(FoodPreset("milk", "Milk", 7), FoodPreset("eggs", "Eggs", 14))
     val draft = ItemDraft(null, "", 1, null, null)
     state = state.copy(draft = draft)
     screen = { ItemEditor(draft = draft, callbacks = callbacks, presets = presets, restored = true) }
     rule.waitForIdle()
-    assertFrameIs(widthDp = 320, heightDp = 340)
+    assertFrameIs(widthDp = 320, heightDp = 548)
 
     rule.onNodeWithText("Premade items").assertIsDisplayed()
     rule.onNodeWithText("One tap fills the name and a date.").assertDoesNotExist()

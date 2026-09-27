@@ -250,6 +250,9 @@ class FridgeWorkflowTest {
     composeRule.onNodeWithText("Milk").performClick()
     composeRule.waitUntil(10_000) { nodeCount("In 7 days") > 0 }
     name.assertTextContains("Milk")
+    // The name is the shortcut's own now, so the line still promises a tap fills the name too:
+    // another chip would replace it, and the line has to say what a tap does.
+    composeRule.onNodeWithText("One tap fills the name and a date.").assertIsDisplayed()
 
     // A name of their own is not replaced by a shortcut, and the date is filled under it. The line
     // changes with it: a tap can only give them the date now, and it must not claim otherwise.

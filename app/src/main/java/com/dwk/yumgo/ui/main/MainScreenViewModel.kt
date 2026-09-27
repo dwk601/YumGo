@@ -509,6 +509,9 @@ class MainScreenViewModel(
       photoMessage = photoMessage,
       // The chip is only lit while something in the draft still came from a preset.
       presetId = if (nameFromPreset || presetEpochDay != null) presetId else null,
+      // The editor's hint has to tell the truth about what a tap would do to the name, and only
+      // this flag knows whether a name that reads like a preset's own is the user's.
+      nameFromPreset = nameFromPreset,
     )
 
   private data class Editable(

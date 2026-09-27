@@ -94,13 +94,18 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.dwk.yumgo.R
@@ -378,9 +383,11 @@ private fun EditorBody(
   BoxWithConstraints(Modifier.fillMaxWidth()) {
     // A short sheet, whether that is a landscape window or a small one with the keyboard up, does
     // not spend its height on a line that only repeats what the chips already say. The pinned part
-    // of a tall editor is about [PinnedHeightDp], and below that plus a section worth scrolling,
-    // the hint goes and the expiry and photo sections get the room instead.
-    val showPresetHint = maxHeight >= HintRoomHeightDp
+    // is mostly text, so the room it needs grows with the text size: a sheet has to be able to
+    // spare [HintRoomHeightDp] at the device's own size, which is the pinned part plus a section
+    // worth scrolling, and twice that at twice the text, or the line goes and the expiry and photo
+    // sections get the room instead.
+    val showPresetHint = maxHeight >= HintRoomHeightDp * LocalDensity.current.fontScale
     Column(Modifier.fillMaxWidth().heightIn(max = maxHeight)) {
       // A tall window has height to spare above the scrolling part, and it spends it on the title
       // and the shortcuts: pinned, the lane is the same size before the first keystroke and after
@@ -400,6 +407,7 @@ private fun EditorBody(
             typed = draft.name,
             selectedId = draft.presetId,
             enabled = !draft.saving,
+            fromPreset = draft.nameFromPreset,
             onPreset = callbacks.onPresetSelected,
             showHint = showPresetHint,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
@@ -478,6 +486,7 @@ private fun EditorFields(
         typed = draft.name,
         selectedId = draft.presetId,
         enabled = !draft.saving,
+        fromPreset = draft.nameFromPreset,
         onPreset = callbacks.onPresetSelected,
         showHint = showPresetHint,
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -598,6 +607,7 @@ private fun PresetLane(
   typed: String,
   selectedId: String?,
   enabled: Boolean,
+  fromPreset: Boolean,
   onPreset: (FoodPreset) -> Unit,
   showHint: Boolean,
   modifier: Modifier = Modifier,
@@ -607,22 +617,14 @@ private fun PresetLane(
   val named = presets.any { it.name.equals(name, ignoreCase = true) }
   val narrowed = completions.isNotEmpty() && !named
   val shown = if (narrowed) completions else presets
+  // A tap fills the name while the field is empty, while the lane is narrowed to chips that would
+  // finish what is being typed, and while the name is a preset's own and another preset may replace
+  // it. A name the user wrote whole is theirs, and the date is all a tap can give them.
+  val fillsBoth = narrowed || name.isEmpty() || fromPreset
   Column(modifier) {
     Text(text = stringResource(R.string.editor_presets_label), style = MaterialTheme.typography.labelLarge)
     if (showHint) {
-      // The line says what a tap does, so it has to be true: every chip in view finishes the name
-      // while the user is part way through one, and a name they wrote whole is left alone, which
-      // leaves the date as the only thing a tap can give them.
-      Text(
-        text =
-          stringResource(
-            if (narrowed || name.isEmpty()) R.string.editor_presets_hint
-            else R.string.editor_presets_hint_date,
-          ),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 2.dp),
-      )
+      PresetHint(fillsBoth)
     }
     Spacer(Modifier.height(4.dp))
     // The chips scroll, and both ends fade into the sheet rather than slicing a chip in half. A
@@ -662,6 +664,41 @@ private fun PresetLane(
       // The fade needs something to fade into, and a last chip flush against it reads as cut off.
       Spacer(Modifier.width(EdgeFadeWidthDp))
     }
+  }
+}
+
+/**
+ * The line that says what a tap of a chip does, in the words that are true right now.
+ *
+ * It holds the height of the taller of the two, measured rather than guessed: at 200% text one of
+ * them wraps and the other does not, and a hint that resized when the words changed would put back
+ * the first-keystroke jump the lane's steady height is there to take away.
+ */
+@Composable
+private fun PresetHint(fillsBoth: Boolean) {
+  val measurer = rememberTextMeasurer()
+  val style = MaterialTheme.typography.bodySmall
+  val color = MaterialTheme.colorScheme.onSurfaceVariant
+  val fills = stringResource(R.string.editor_presets_hint)
+  val date = stringResource(R.string.editor_presets_hint_date)
+  val density = LocalDensity.current
+  BoxWithConstraints(Modifier.fillMaxWidth()) {
+    val reserved =
+      remember(measurer, maxWidth, style, fills, date, density) {
+        val constraints = Constraints(maxWidth = with(density) { maxWidth.roundToPx() })
+        val taller =
+          maxOf(
+            measurer.measure(fills, style, constraints = constraints).size.height,
+            measurer.measure(date, style, constraints = constraints).size.height,
+          )
+        with(density) { taller.toDp() }
+      }
+    Text(
+      text = if (fillsBoth) fills else date,
+      style = style,
+      color = color,
+      modifier = Modifier.heightIn(min = reserved),
+    )
   }
 }
 
@@ -859,15 +896,14 @@ private const val RevealWaitMillis = 1_500L
 /** How wide the fade at the ends of the shortcut lane is, and the gap it needs to fade into. */
 private val EdgeFadeWidthDp = 16.dp
 
-/** Roughly what the title, the shortcut lane and the name with Save take up when they are pinned. */
-private val PinnedHeightDp = 250.dp
-
 /**
- * The height a sheet needs before the shortcut hint is worth a line: the pinned part, plus a
- * scrolling part tall enough for a whole section. Below that, a small window with the keyboard up
- * or a landscape one would be showing the hint instead of the expiry and photo rows.
+ * The height a sheet has to spare before the shortcut hint is worth a line: the pinned title, lane
+ * and name row, which come to about 250dp, plus a scrolling part tall enough for a whole section.
+ * Below that a small window with the keyboard up, or a landscape one, would be showing the hint
+ * instead of the expiry and photo rows. The editor measures against this at the device's own text
+ * size and scales it with the text size, because the pinned part is mostly text.
  */
-private val HintRoomHeightDp = PinnedHeightDp + 130.dp
+private val HintRoomHeightDp = 380.dp
 
 /** Frames the scroll range must hold still before the editor scrolls to a photo problem. */
 private const val SettledFrames = 3
