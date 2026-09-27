@@ -2,12 +2,14 @@ package com.dwk.yumgo
 
 import android.database.sqlite.SQLiteDatabase
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.core.view.WindowCompat
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -26,7 +28,9 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.dwk.yumgo.data.SettingsServices
+import com.dwk.yumgo.data.ThemeMode
 import java.io.FileInputStream
+import kotlinx.coroutines.runBlocking
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -564,12 +568,133 @@ class SettingsPresetWorkflowTest {
   }
 
   /**
+   * With 3-button navigation the bar belongs to the app, not the device: the icons and the surface
+   * under them both follow the app's palette. Checked both ways round, because the scrim and the
+   * icon tint are two separate things and either one could follow the wrong side.
+   */
+  @Test
+  fun threeButtonNavBar_followsTheAppAndNotTheDevice() {
+    // The overlay the device has now is the one put back at the end; the check needs the
+    // three-button navigation to exist at all, since that is the case with a real scrim.
+    val overlay = enabledNavOverlay()
+    assertTrue("This device has no three-button navigation to check", shell("cmd overlay list android").contains(ThreeButtonOverlay))
+    try {
+      enableNavOverlay(ThreeButtonOverlay)
+      Thread.sleep(2_000)
+      composeRule.waitForIdle()
+
+      // A light app on a dark device: the app's own light surface, with dark icons on it.
+      setDeviceNightMode(true)
+      composeRule.waitForIdle()
+      assertFalse("The light app followed the dark device", screenIsDark())
+      assertTrue(
+        "A light app still needs dark navigation-bar icons on a dark device",
+        settles { navBarIconsAreDark() },
+      )
+      assertTrue(
+        "The navigation bar is not showing the app's own background: ${barColours()}",
+        navBarShowsAppBackground(),
+      )
+
+      // A dark app on a light device: the app's dark surface, with pale icons on it.
+      openSettings()
+      themeRow("Dark").performClick()
+      composeRule.waitUntil(10_000) { screenIsDark() }
+      backToFridge()
+      setDeviceNightMode(false)
+      composeRule.waitForIdle()
+      assertTrue("The app did not go dark", screenIsDark())
+      assertFalse(
+        "A dark app needs pale navigation-bar icons, not the device's light bar",
+        settles { navBarIconsAreDark() },
+      )
+      assertTrue(
+        "The navigation bar is not showing the app's own background: ${barColours()}",
+        navBarShowsAppBackground(),
+      )
+    } finally {
+      runBlocking { SettingsServices.preferences(appContext()).setThemeMode(ThemeMode.Light) }
+      setDeviceNightMode(null)
+      enableNavOverlay(overlay)
+    }
+  }
+
+  /** True once the check holds, or once the frames have had their chance to settle. */
+  private fun settles(check: () -> Boolean): Boolean {
+    val deadline = System.currentTimeMillis() + 10_000
+    while (System.currentTimeMillis() < deadline) {
+      if (check()) return true
+      Thread.sleep(250)
+    }
+    return check()
+  }
+
+  /** What the window asked for: light icons mean a light bar under them. */
+  private fun navBarIconsAreDark(): Boolean {
+    var dark = false
+    onMainThread {
+      val window = composeRule.activity.window
+      dark = WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars
+    }
+    return dark
+  }
+
+  /** The bar, and the app just above it, as the screen actually paints them. */
+  private fun barColours(): String =
+    "bar ${hex(dominantColour(0.965f))} against app ${hex(dominantColour(0.90f))}"
+
+  private fun navBarShowsAppBackground(): Boolean =
+    colourDistance(dominantColour(0.965f), dominantColour(0.90f)) < 14
+
+  /** The colour a person sees across a band of the screen, taken from a real frame. */
+  private fun dominantColour(yFraction: Float): Int {
+    val bitmap = frame()
+    val counts = HashMap<Int, Int>()
+    val y = (bitmap.height * yFraction).toInt()
+    var x = (bitmap.width * 0.05f).toInt()
+    while (x < bitmap.width * 0.95f) {
+      val pixel = bitmap.getPixel(x, y) or (0xFF shl 24)
+      counts[pixel] = (counts[pixel] ?: 0) + 1
+      x += 12
+    }
+    return counts.maxByOrNull { it.value }?.key ?: error("could not read the screen")
+  }
+
+  private fun colourDistance(first: Int, second: Int): Int {
+    fun channel(shift: Int) = Math.abs(((first shr shift) and 0xFF) - ((second shr shift) and 0xFF))
+    return channel(16) + channel(8) + channel(0)
+  }
+
+  private fun hex(colour: Int): String = "#%06X".format(colour and 0xFFFFFF)
+
+  private fun frame(): Bitmap {
+    val bytes = shellBytes("screencap -p")
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: error("Could not read the screen")
+  }
+
+  private fun onMainThread(block: () -> Unit) {
+    InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
+  }
+
+  private fun enabledNavOverlay(): String =
+    shell("cmd overlay list android")
+      .lines()
+      .firstOrNull { it.trimStart().startsWith("[x]") && "navbar" in it }
+      ?.substringAfter("[x]")
+      ?.trim()
+      ?: ""
+
+  private fun enableNavOverlay(overlay: String) {
+    shell("cmd overlay enable-exclusive $overlay")
+    Thread.sleep(1_500)
+  }
+
+  /**
    * Reads the real frame and calls it light or dark by its mean brightness, which is what a person
    * would say looking at it.
    */
   private fun screenIsDark(): Boolean {
-    val bytes = shellBytes("screencap -p")
-    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: error("Could not read the screen")
+    val bitmap = frame()
     var total = 0.0
     var samples = 0
     var y = (bitmap.height * 0.15f).toInt()
@@ -586,6 +711,9 @@ class SettingsPresetWorkflowTest {
     return (total / samples) / 255.0 < 0.5
   }
 }
+
+/** The navigation the device offers, switched through its own system overlay. */
+private const val ThreeButtonOverlay = "com.android.internal.systemui.navbar.threebutton"
 
 /** Settings live in their own preference files, so each test starts from the bundled defaults. */
 internal class CleanSettingsRule : TestWatcher() {
