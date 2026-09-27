@@ -99,6 +99,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.dwk.yumgo.R
+import com.dwk.yumgo.data.FoodPreset
 import com.dwk.yumgo.theme.YumgoTheme
 import java.io.File
 import java.time.LocalDate
@@ -120,6 +121,7 @@ fun FridgeContent(
   state: FridgeUiState,
   callbacks: FridgeCallbacks,
   modifier: Modifier = Modifier,
+  presets: List<FoodPreset> = emptyList(),
   snackbarHost: @Composable () -> Unit = {},
   cameraContent: @Composable () -> Unit = {},
 ) {
@@ -144,6 +146,7 @@ fun FridgeContent(
           ItemEditor(
             draft = draft,
             callbacks = callbacks,
+            presets = presets,
             restored = restoreEditor || state.cameraOpen,
             backEnabled = !state.cameraOpen,
           )
@@ -928,6 +931,7 @@ private fun FridgeContentPreview() {
             ),
         ),
       callbacks = IdleCallbacks,
+      presets = listOf(FoodPreset("milk", "Milk", 7), FoodPreset("eggs", "Eggs", 14), FoodPreset("bread", "Bread", 5)),
     )
   }
 }

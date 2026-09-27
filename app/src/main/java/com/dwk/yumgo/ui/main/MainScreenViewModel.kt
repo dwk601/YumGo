@@ -5,10 +5,13 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dwk.yumgo.R
+import com.dwk.yumgo.data.FoodPreset
 import com.dwk.yumgo.data.FridgeItem
 import com.dwk.yumgo.data.FridgeRepository
 import com.dwk.yumgo.data.NewFridgeItem
 import com.dwk.yumgo.data.PhotoStore
+import com.dwk.yumgo.data.PresetRepository
+import com.dwk.yumgo.data.SettingsServices
 import com.dwk.yumgo.ui.photo.PhotoAcquisition
 import java.time.LocalDate
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,6 +37,7 @@ import kotlinx.coroutines.launch
 class MainScreenViewModel(
   private val repository: FridgeRepository,
   private val photos: PhotoStore,
+  presets: PresetRepository,
   private val appContext: Context,
   private val savedState: SavedStateHandle,
 ) : ViewModel() {
@@ -51,6 +55,12 @@ class MainScreenViewModel(
 
   /** Latest delete that can still be undone. Survives recreation until Undo or dismiss. */
   val pendingUndoState: StateFlow<PendingUndo?> = pendingUndo
+
+  /**
+   * Premade foods offered to a new draft. Read from the process-wide repository, so a change
+   * made in settings reaches the next draft and never rewrites one that is already filled.
+   */
+  val presets: StateFlow<List<FoodPreset>> = presets.presets
 
   val notices = MutableSharedFlow<FridgeNotice>(extraBufferCapacity = 4)
 
@@ -101,6 +111,25 @@ class MainScreenViewModel(
     persistDraft()
   }
 
+  /**
+   * Fills the new draft from a premade food: its name and today's date plus its suggested days.
+   * Nothing is written to the fridge until Save, and a later edit of the name or the date drops
+   * the link so nothing reapplies the suggestion.
+   */
+  fun onPresetSelected(preset: FoodPreset) {
+    val current = draft.value ?: return
+    if (current.id != null || current.saving) return
+    val days = preset.expiryDays.coerceIn(0, MaxPresetDays).toLong()
+    draft.value =
+      current.copy(
+        name = preset.name,
+        expiryEpochDay = LocalDate.now().plusDays(days).toEpochDay(),
+        errorMessage = null,
+        presetId = preset.id,
+      )
+    persistDraft()
+  }
+
   fun onEdit(id: String) {
     if (draft.value?.saving == true) return
     val item = items.value.firstOrNull { it.id == id } ?: return
@@ -118,12 +147,14 @@ class MainScreenViewModel(
   fun onDraftChange(updated: ItemDraft) {
     val current = draft.value ?: return
     if (current.saving) return
+    val filledValuesChanged = updated.name != current.name || updated.expiryEpochDay != current.expiryEpochDay
     draft.value =
       current.copy(
         name = updated.name,
         quantity = updated.quantity.coerceIn(1, 99),
         expiryEpochDay = updated.expiryEpochDay,
         errorMessage = null,
+        presetId = if (filledValuesChanged) null else current.presetId,
       )
     persistDraft()
   }
@@ -382,14 +413,16 @@ class MainScreenViewModel(
       savedState.remove<Long>(KEY_DRAFT_EXPIRY)
       savedState.remove<String>(KEY_DRAFT_PHOTO)
       savedState.remove<String>(KEY_DRAFT_PHOTO_MESSAGE)
+      savedState.remove<String>(KEY_DRAFT_PRESET)
       return
     }
     if (current.id == null) savedState.remove<String>(KEY_DRAFT_ID) else savedState[KEY_DRAFT_ID] = current.id
     savedState[KEY_DRAFT_NAME] = current.name
     savedState[KEY_DRAFT_QTY] = current.quantity
     if (current.expiryEpochDay == null) savedState.remove<Long>(KEY_DRAFT_EXPIRY) else savedState[KEY_DRAFT_EXPIRY] = current.expiryEpochDay
-    if (current.photoRef == null) savedState.remove<String>(KEY_DRAFT_PHOTO) else savedState[KEY_DRAFT_PHOTO] = current.photoRef
+    savedState[KEY_DRAFT_PHOTO] = current.photoRef
     if (current.photoMessage == null) savedState.remove<String>(KEY_DRAFT_PHOTO_MESSAGE) else savedState[KEY_DRAFT_PHOTO_MESSAGE] = current.photoMessage
+    if (current.presetId == null) savedState.remove<String>(KEY_DRAFT_PRESET) else savedState[KEY_DRAFT_PRESET] = current.presetId
   }
 
   private fun readDraft(): Editable? {
@@ -401,6 +434,7 @@ class MainScreenViewModel(
       expiryEpochDay = savedState.get<Long>(KEY_DRAFT_EXPIRY),
       photoRef = savedState.get<String>(KEY_DRAFT_PHOTO),
       photoMessage = savedState.get<String>(KEY_DRAFT_PHOTO_MESSAGE),
+      presetId = savedState.get<String>(KEY_DRAFT_PRESET),
     )
   }
 
@@ -451,6 +485,7 @@ class MainScreenViewModel(
       saving = saving,
       errorMessage = errorMessage,
       photoMessage = photoMessage,
+      presetId = presetId,
     )
 
   private data class Editable(
@@ -462,6 +497,7 @@ class MainScreenViewModel(
     val saving: Boolean = false,
     val errorMessage: String? = null,
     val photoMessage: String? = null,
+    val presetId: String? = null,
   )
 
   private companion object {
@@ -474,6 +510,7 @@ class MainScreenViewModel(
     const val KEY_DRAFT_EXPIRY = "draft_expiry"
     const val KEY_DRAFT_PHOTO = "draft_photo"
     const val KEY_DRAFT_PHOTO_MESSAGE = "draft_photo_message"
+    const val KEY_DRAFT_PRESET = "draft_preset"
     const val KEY_UNDO_ID = "undo_id"
     const val KEY_UNDO_NAME = "undo_name"
   }
@@ -487,3 +524,6 @@ data class PendingUndo(
 data class FridgeNotice(
   val text: String,
 )
+
+/** Longest suggested shelf life a preset may contribute, matching the settings limit. */
+private const val MaxPresetDays = 365

@@ -17,6 +17,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dwk.yumgo.R
 import com.dwk.yumgo.data.OfflineFridgeRepository
 import com.dwk.yumgo.data.PhotoStore
+import com.dwk.yumgo.data.SettingsServices
 import com.dwk.yumgo.ui.photo.PhotoCapture
 import com.dwk.yumgo.ui.photo.rememberPhotoPicker
 
@@ -33,6 +34,7 @@ fun MainScreen(
 ) {
   val state by viewModel.uiState.collectAsStateWithLifecycle()
   val pendingUndo by viewModel.pendingUndoState.collectAsStateWithLifecycle()
+  val presets by viewModel.presets.collectAsStateWithLifecycle()
   val snackbar = remember { SnackbarHostState() }
   val context = LocalContext.current.applicationContext
   val photos = remember(viewModel) { PhotoStoreHolder.photos(context) }
@@ -73,11 +75,13 @@ fun MainScreen(
       },
       onRemovePhoto = viewModel::onRemovePhoto,
       onOpenSettings = onOpenSettings,
+      onPresetSelected = viewModel::onPresetSelected,
     )
   FridgeContent(
     state = state,
     callbacks = callbacks,
     modifier = modifier,
+    presets = presets,
     snackbarHost = { SnackbarHost(snackbar) },
     cameraContent = {
       PhotoCapture(
@@ -96,6 +100,7 @@ private fun fridgeViewModel(): MainScreenViewModel {
     MainScreenViewModel(
       repository = PhotoStoreHolder.repository(appContext),
       photos = PhotoStoreHolder.photos(appContext),
+      presets = SettingsServices.presets(appContext),
       appContext = appContext,
       savedState = createSavedStateHandle(),
     )

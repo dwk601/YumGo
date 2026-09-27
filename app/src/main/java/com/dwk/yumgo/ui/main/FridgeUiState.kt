@@ -1,5 +1,7 @@
 package com.dwk.yumgo.ui.main
 
+import com.dwk.yumgo.data.FoodPreset
+
 /**
  * Presentation state for the fridge. The caller owns persistence and photo files;
  * this model is only what the screen renders.
@@ -56,6 +58,11 @@ data class ItemDraft(
   val errorMessage: String? = null,
   /** Neutral photo problem. Shown under Photo, separate from [errorMessage]. */
   val photoMessage: String? = null,
+  /**
+   * Preset that filled this draft, or null. Set when a preset is applied and cleared as soon as
+   * the user edits the name or the date, so a filled draft is never silently reset.
+   */
+  val presetId: String? = null,
 )
 
 /**
@@ -79,4 +86,6 @@ data class FridgeCallbacks(
   val onRemovePhoto: () -> Unit,
   /** Header action that pushes the settings destination. */
   val onOpenSettings: () -> Unit = {},
+  /** Fills the new draft from a premade food. Saves nothing by itself. */
+  val onPresetSelected: (preset: FoodPreset) -> Unit = {},
 )

@@ -47,6 +47,8 @@
     <string name="editor_edit_title">Edit item</string>
     <string name="editor_name_label">Name</string>
     <string name="editor_quantity_label">Quantity</string>
+    <string name="editor_presets_label">Premade items</string>
+    <string name="editor_presets_hint">One tap fills the name and suggests a date. Change anything before you save.</string>
     <string name="editor_expiry_label">Expiry</string>
     <string name="editor_expiry_none">No expiry</string>
     <string name="editor_expiry_choose">Choose expiry date</string>

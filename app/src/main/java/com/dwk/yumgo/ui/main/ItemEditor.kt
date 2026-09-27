@@ -13,6 +13,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -82,6 +83,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.dwk.yumgo.R
+import com.dwk.yumgo.data.FoodPreset
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -95,13 +97,14 @@ import java.time.ZoneOffset
 fun ItemEditor(
   draft: ItemDraft,
   callbacks: FridgeCallbacks,
+  presets: List<FoodPreset> = emptyList(),
   restored: Boolean = false,
   backEnabled: Boolean = true,
   modifier: Modifier = Modifier,
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   if (restored) {
-    RestoredEditor(draft = draft, callbacks = callbacks, backEnabled = backEnabled, modifier = modifier)
+    RestoredEditor(draft = draft, presets = presets, callbacks = callbacks, backEnabled = backEnabled, modifier = modifier)
   } else {
     ModalBottomSheet(
       onDismissRequest = { if (!draft.saving) callbacks.onDismissEditor() },
@@ -115,6 +118,7 @@ fun ItemEditor(
       EditorBody(
         draft = draft,
         callbacks = callbacks,
+        presets = presets,
         requestFocus = draft.id == null,
         sheetState = sheetState,
       )
@@ -125,6 +129,7 @@ fun ItemEditor(
 @Composable
 private fun RestoredEditor(
   draft: ItemDraft,
+  presets: List<FoodPreset>,
   callbacks: FridgeCallbacks,
   backEnabled: Boolean,
   modifier: Modifier = Modifier,
@@ -156,7 +161,7 @@ private fun RestoredEditor(
     ) {
       Column(Modifier.fillMaxWidth()) {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { BottomSheetDefaults.DragHandle() }
-        EditorBody(draft = draft, callbacks = callbacks, requestFocus = false, sheetState = null)
+        EditorBody(draft = draft, callbacks = callbacks, presets = presets, requestFocus = false, sheetState = null)
       }
     }
   }
@@ -166,6 +171,7 @@ private fun RestoredEditor(
 private fun EditorBody(
   draft: ItemDraft,
   callbacks: FridgeCallbacks,
+  presets: List<FoodPreset>,
   requestFocus: Boolean,
   sheetState: SheetState? = null,
 ) {
@@ -222,6 +228,16 @@ private fun EditorBody(
           keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
           keyboardActions = KeyboardActions(onDone = { if (canSave) callbacks.onSave() }),
         )
+        Spacer(Modifier.height(8.dp))
+        if (draft.id == null && presets.isNotEmpty()) {
+          PresetRow(
+            presets = presets,
+            selectedId = draft.presetId,
+            enabled = !draft.saving,
+            onPreset = callbacks.onPresetSelected,
+          )
+          Spacer(Modifier.height(16.dp))
+        }
         Spacer(Modifier.height(8.dp))
         Text(text = stringResource(R.string.editor_quantity_label), style = MaterialTheme.typography.labelLarge)
         QuantityStepper(
@@ -287,6 +303,58 @@ private fun EditorBody(
       },
       onDismiss = { pickingDate = false },
     )
+  }
+}
+
+/**
+ * Premade foods as one scrolling row of fills, shown only while adding. A tap writes the name
+ * and a suggested date into the draft; Save is still the only thing that adds the item.
+ */
+@Composable
+private fun PresetRow(
+  presets: List<FoodPreset>,
+  selectedId: String?,
+  enabled: Boolean,
+  onPreset: (FoodPreset) -> Unit,
+) {
+  Column(Modifier.fillMaxWidth()) {
+    Text(text = stringResource(R.string.editor_presets_label), style = MaterialTheme.typography.labelLarge)
+    Text(
+      text = stringResource(R.string.editor_presets_hint),
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.padding(top = 2.dp),
+    )
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(top = 8.dp).horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      presets.forEach { preset ->
+        val selected = preset.id == selectedId
+        OutlinedButton(
+          onClick = { onPreset(preset) },
+          enabled = enabled,
+          modifier = Modifier.heightIn(min = 48.dp),
+          shape = MaterialTheme.shapes.extraLarge,
+          colors =
+            if (selected) {
+              ButtonDefaults.outlinedButtonColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+              )
+            } else {
+              ButtonDefaults.outlinedButtonColors()
+            },
+        ) {
+          if (selected) {
+            Icon(FridgeCheck, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+          }
+          Text(preset.name, maxLines = 1)
+        }
+      }
+    }
   }
 }
 
