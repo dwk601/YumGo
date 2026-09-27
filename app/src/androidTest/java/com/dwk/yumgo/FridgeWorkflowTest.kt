@@ -14,6 +14,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -189,6 +190,29 @@ class FridgeWorkflowTest {
       composeRule.onNodeWithText("Cold Butter").assertIsDisplayed()
       composeRule.onNode(hasContentDescription("Quantity 2"), useUnmergedTree = true).assertIsDisplayed()
     }
+  }
+
+  /**
+   * A configuration change, which is the path a rotation takes: the activity is destroyed and
+   * built again, so the open sheet, the typed name, and a reachable Save all have to come back, and
+   * a saved item has to still be there afterwards.
+   */
+  @Test
+  fun configurationChange_keepsTheOpenEditorAndTheFridge() {
+    addButton().performClick()
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Rotate Eggs")
+    composeRule.waitUntil(5_000) { nodeCount("Rotate Eggs") > 0 }
+
+    composeRule.activity.runOnUiThread { composeRule.activity.recreate() }
+    composeRule.waitForIdle()
+    composeRule.waitUntil(15_000) { nodeCount("Rotate Eggs") > 0 && nodeCount("Add to the fridge") > 0 }
+    // Save stays usable, and the draft is still the one being typed.
+    composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled()
+    val name = composeRule.onNode(hasSetTextAction() and hasText("Rotate Eggs", substring = true))
+    name.performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().performClick()
+    composeRule.waitUntil(15_000) { nodeCount("Rotate Eggs") > 0 }
+    composeRule.onNodeWithText("Rotate Eggs").assertIsDisplayed()
   }
 
   private fun readQuantity(name: String): Int? {

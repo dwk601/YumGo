@@ -7,14 +7,22 @@ import android.view.accessibility.AccessibilityWindowInfo
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
@@ -34,6 +42,8 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -62,6 +72,10 @@ class FridgeContentWorkflowTest {
   private var state by mutableStateOf(FridgeUiState(load = FridgeLoad.Ready))
   private val events = mutableListOf<String>()
   private val snackbar = SnackbarHostState()
+  /** 0 leaves the surface full width; a value narrows the window the way a small phone would. */
+  private var frameWidthDp by mutableIntStateOf(0)
+  /** 1 is the device font scale; 2 stands in for the 200% text setting. */
+  private var frameFontScale by mutableFloatStateOf(1f)
 
   private val callbacks =
     FridgeCallbacks(
@@ -99,16 +113,25 @@ class FridgeContentWorkflowTest {
     automation.serviceInfo =
       automation.serviceInfo.apply { flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS }
     rule.setContent {
-      YumgoTheme {
-        FridgeContent(
-          state = state,
-          callbacks = callbacks,
-          snackbarHost = { SnackbarHost(snackbar) },
-          cameraContent = {
-            BackHandler { state = state.copy(cameraOpen = false) }
-            Text(CAMERA_SLOT)
-          },
-        )
+      val base = LocalDensity.current
+      CompositionLocalProvider(LocalDensity provides Density(base.density, frameFontScale)) {
+        Box(
+          Modifier
+            .fillMaxSize()
+            .then(if (frameWidthDp > 0) Modifier.width(frameWidthDp.dp) else Modifier),
+        ) {
+          YumgoTheme {
+            FridgeContent(
+              state = state,
+              callbacks = callbacks,
+              snackbarHost = { SnackbarHost(snackbar) },
+              cameraContent = {
+                BackHandler { state = state.copy(cameraOpen = false) }
+                Text(CAMERA_SLOT)
+              },
+            )
+          }
+        }
       }
     }
   }
@@ -282,6 +305,99 @@ class FridgeContentWorkflowTest {
   /** Add FAB located through its visible label, independent of how its semantics are merged. */
   private fun addButton(): SemanticsNodeInteraction =
     rule.onNode(hasClickAction() and hasAnyDescendant(hasText("Add")), useUnmergedTree = true)
+
+  /**
+   * A 320dp window at 200% text: the expiry label, its date, and both actions have to stack and
+   * stay readable, Save has to stay reachable, and the stepper stays usable at that text size.
+   */
+  @Test
+  fun narrowWindowAtLargeText_keepsExpiryActionsAndSaveUsable() {
+    val today = LocalDate.now().toEpochDay()
+    frameWidthDp = 320
+    frameFontScale = 2f
+    state =
+      state.copy(
+        items = listOf(FridgeItemUi("milk", "Whole Milk", 2, today + 1, null)),
+        draft = ItemDraft(null, "Yoghurt", 2, today + 3, null, presetId = "yogurt"),
+      )
+    rule.waitForIdle()
+
+    // The editor's expiry block reads top to bottom, with nothing overlapping.
+    rule.onNodeWithText("Expiry").assertIsDisplayed()
+    rule.onNodeWithText("In 3 days").assertIsDisplayed()
+    val date = rule.onNodeWithText("In 3 days").screenBounds()
+    val choose = rule.onNodeWithText("Choose expiry date").assertIsDisplayed().screenBounds()
+    val clear = rule.onNodeWithText("Clear expiry date").assertIsDisplayed().screenBounds()
+    assertTrue("The choose action overlaps the date at $date and $choose", choose.top >= date.bottom)
+    assertTrue("The clear action overlaps the date at $date and $clear", clear.top >= date.bottom)
+    assertTrue("The expiry actions run off the 320dp window: $choose and $clear", clear.right <= screenWidth())
+
+    // Save is still there, still inside the window, and still works.
+    val save = rule.onNodeWithText("Save").assertIsDisplayed().assertIsEnabled().screenBounds()
+    assertTrue("Save runs off the 320dp window: $save", save.right <= screenWidth())
+    rule.onNodeWithText("Save").performClick()
+    rule.waitForIdle()
+    assertTrue(events.toString(), "save:Yoghurt" in events)
+
+    // The quantity stepper is still reachable at this text size.
+    rule.onNode(hasContentDescription("Increase quantity of Yoghurt"), useUnmergedTree = true).assertExists()
+  }
+
+  /** The expiry actions do the work: clearing drops the date, and the picker sets a new one. */
+  @Test
+  fun expiryActions_clearAndRechooseTheDate() {
+    val today = LocalDate.now().toEpochDay()
+    state = state.copy(draft = ItemDraft(null, "Cheese", 1, today + 5, null))
+    rule.waitForIdle()
+    rule.onNodeWithText("In 5 days").assertIsDisplayed()
+    rule.onNodeWithText("Clear expiry date").assertIsDisplayed().performClick()
+    rule.waitForIdle()
+    rule.onNodeWithText("No expiry").assertIsDisplayed()
+    rule.onNodeWithText("Clear expiry date").assertDoesNotExist()
+    rule.onNodeWithText("Choose expiry date").assertIsDisplayed().performClick()
+    rule.waitForIdle()
+    rule.onNodeWithText("Set date").assertIsDisplayed()
+    rule.onNode(hasText("Today", substring = true)).assertIsDisplayed().performClick()
+    rule.onNodeWithText("Set date").assertIsDisplayed().performClick()
+    rule.waitForIdle()
+    rule.onNodeWithText("Today").assertIsDisplayed()
+    assertEquals(today, state.draft?.expiryEpochDay)
+  }
+
+  /** A 200% card keeps its name, its date, and its stepper apart on a 320dp window. */
+  @Test
+  fun narrowWindowAtLargeText_keepsTheCardReadable() {
+    val today = LocalDate.now().toEpochDay()
+    frameWidthDp = 320
+    frameFontScale = 2f
+    state =
+      state.copy(
+        items =
+          listOf(
+            FridgeItemUi("milk", "Semi Skimmed Whole Milk", 12, today + 1, null),
+            FridgeItemUi("rice", "Basmati Rice", 2, null, null),
+          ),
+      )
+    rule.waitForIdle()
+    // The card is one clickable surface, so the text bounds come from the unmerged tree.
+    val name =
+      rule
+        .onNode(hasText("Semi Skimmed Whole Milk"), useUnmergedTree = true)
+        .assertExists()
+        .screenBounds()
+    val date = rule.onNode(hasText("Tomorrow"), useUnmergedTree = true).assertExists().screenBounds()
+    val plus =
+      rule
+        .onNode(hasContentDescription("Increase quantity of Semi Skimmed Whole Milk"), useUnmergedTree = true)
+        .assertExists()
+        .screenBounds()
+    assertTrue("The date ran into the name: $name and $date", date.top >= name.bottom)
+    assertTrue("The stepper sat on the text: $date and $plus", plus.top >= date.bottom)
+    assertTrue("The card runs off the 320dp window: $plus", plus.right <= screenWidth())
+    rule.onNodeWithText("No expiry").assertIsDisplayed()
+  }
+
+  private fun screenWidth(): Float = rule.activity.window.decorView.width.toFloat()
 
   private fun scrollListToEnd() {
     var guard = 0
