@@ -137,29 +137,30 @@ class SettingsPresetWorkflowTest {
   }
 
   /**
-   * A shortcut never takes back something the user decided. The premade row stays where it is while
-   * a name of their own is being typed and leaves that name alone; a name they have only started is
-   * completed by the chip they press; a date they picked by hand survives a later chip; and both
-   * survive Save.
+   * A shortcut never takes back something the user decided. The premade lane stays on screen while
+   * a name of their own is being typed and leaves that name alone, a name they have only started is
+   * finished by the shortcut they press, a date they picked by hand survives a later shortcut, and
+   * both survive Save.
    */
   @Test
   fun presetTap_neverTakesBackANameOrDateTheUserChose() {
     addButton().performClick()
     composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("My Own Milk")
     composeRule.waitForIdle()
-    // The row stays on screen, so nothing in it moves out from under the finger, and what they
-    // typed is still the name in the field.
+    // The lane stays where it is, so nothing moves out from under the finger, and what they typed
+    // is still the name in the field.
     composeRule.onNodeWithText("Premade items").assertIsDisplayed()
     assertDraftName("My Own Milk")
-    // A name that is not the start of any food is left alone by a chip that is pressed after it.
-    if (composeRule.onAllNodes(hasText("Milk")).fetchSemanticsNodes().isNotEmpty()) {
-      tapPreset("Milk")
-      assertDraftName("My Own Milk")
-    }
 
-    // A name they have only started is completed by the chip they press: Mi plus Milk is Milk,
-    // and that is a chip filling a name, which is also when the suggested date comes.
+    // A name that is not the start of any food is left alone by a shortcut pressed after it; the
+    // date it was still free to suggest, it does fill.
+    tapPreset("Milk")
+    assertDraftName("My Own Milk")
+    assertExpiryLabel("In 7 days")
+
+    // A name they have only started is finished by the shortcut they press: Mi plus Milk is Milk.
     composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextReplacement("Mi")
+    assertDraftName("Mi")
     tapPreset("Milk")
     assertDraftName("Milk")
     assertExpiryLabel("In 7 days")
@@ -170,7 +171,7 @@ class SettingsPresetWorkflowTest {
     tapInEditor("Set date")
     assertExpiryLabel("Today")
 
-    // A later chip must not take that date back.
+    // A later shortcut must not take that date back.
     tapPreset("Fish")
     assertDraftName("Fish")
     assertExpiryLabel("Today")
