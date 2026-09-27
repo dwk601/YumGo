@@ -1,26 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Themed icon silhouette: the YumGo fridge mascot. Paths are the measured
+    mascot outline scaled into the 66dp safe circle of the 108dp adaptive icon,
+    and stay inside it so themed icons never clip the sprout or the feet.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M53.2,27C49.59,22.78 44.01,25.7 42.6,29.8C45.85,32.66 52.14,32.45 53.2,27Z" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54.20,32.00C55.45,27.62 50.32,25.31 46.00,26.20C46.60,30.57 50.49,34.64 54.20,32.00Z" />
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54.8,26.2C57.44,30.36 62.92,28.57 64.8,25.2C62.28,22.27 56.56,21.6 54.8,26.2Z" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M53.80,32.00C57.70,34.45 61.90,29.96 62.60,25.40C58.02,24.80 52.54,27.57 53.80,32.00Z" />
     <path
-        android:fillColor="#00000000"
-        android:pathData="M54,38C54,32 52.6,27.5 54,23"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="3.2"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54.00,26.50L54.00,26.50C54.66,26.50 55.20,27.04 55.20,27.70L55.20,32.30C55.20,32.96 54.66,33.50 54.00,33.50L54.00,33.50C53.34,33.50 52.80,32.96 52.80,32.30L52.80,27.70C52.80,27.04 53.34,26.50 54.00,26.50Z" />
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M42,35.5L66,35.5C70.42,35.5 74,39.08 74,43.5L74,46.5C74,50.92 70.42,54.5 66,54.5L42,54.5C37.58,54.5 34,50.92 34,46.5L34,43.5C34,39.08 37.58,35.5 42,35.5Z" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M40.50,32.40L67.50,32.40C70.81,32.40 73.50,35.09 73.50,38.40L73.50,49.40C73.50,52.71 70.81,55.40 67.50,55.40L40.50,55.40C37.19,55.40 34.50,52.71 34.50,49.40L34.50,38.40C34.50,35.09 37.19,32.40 40.50,32.40Z" />
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M42,58L66,58C70.42,58 74,61.58 74,66L74,73C74,77.42 70.42,81 66,81L42,81C37.58,81 34,77.42 34,73L34,66C34,61.58 37.58,58 42,58Z" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M40.50,57.60L67.50,57.60C70.81,57.60 73.50,60.29 73.50,63.60L73.50,76.00C73.50,79.31 70.81,82.00 67.50,82.00L40.50,82.00C37.19,82.00 34.50,79.31 34.50,76.00L34.50,63.60C34.50,60.29 37.19,57.60 40.50,57.60Z" />
 </vector>
