@@ -15,6 +15,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
@@ -35,7 +36,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.dwk.yumgo.data.FoodPreset
 import com.dwk.yumgo.data.SettingsServices
+import com.dwk.yumgo.data.ThemeMode
 import java.io.FileInputStream
+import kotlinx.coroutines.runBlocking
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -608,9 +611,17 @@ class SettingsPresetWorkflowTest {
       bounds.bottom <= visibleBottom + HalfPixel,
     )
 
-    // The button, not the word on it: half a button is not something a finger can press.
+    // The button, not the word on it: half a button is not something a finger can press. The
+    // bounds are clipped to the list, so a button the list is cutting off reports a shorter box
+    // than the button has, and a sliver of it under the keyboard would pass every check below.
     val save = saveButton().assertIsDisplayed().assertIsEnabled().fetchSemanticsNode()
     val saveBounds = save.boundsInWindow
+    assertEquals(
+      "The Save button is clipped to $saveBounds of ${save.size}",
+      save.size.height.toFloat(),
+      saveBounds.height,
+      HalfPixel,
+    )
     assertTrue(
       "Save is behind the keyboard or the navigation bar: $saveBounds against $visibleBottom",
       saveBounds.bottom <= visibleBottom + HalfPixel,
@@ -922,6 +933,64 @@ class SettingsPresetWorkflowTest {
    * With 3-button navigation the bar belongs to the app, not the device. Checked both ways round,
    * because the scrim and the icon appearance are two separate things and either one could follow
    * the wrong side.
+   *
+   * Two different kinds of check live here, and they are not the same promise:
+   * - the surface under the bar is read from real pixels, so a scrim the app did not ask for fails;
+   * - the icon appearance is the flag the window requests
+   *   (isAppearanceLightNavigationBars), not a sample of the drawn icons. It says the app asked for
+   *   dark icons on a light bar; it cannot see a launcher or platform that draws them in another
+   *   colour anyway. The name says so, so nobody reads it as a visual guarantee.
+   */
+  @Test
+  fun threeButtonNavBar_followsTheAppAndNotTheDevice() {
+    // The overlay the device has now is the one put back at the end; the check needs the
+    // three-button navigation to exist at all, since that is the case with a real scrim.
+    val overlay = enabledNavOverlay()
+    assertTrue("This device has no three-button navigation to check", shell("cmd overlay list android").contains(ThreeButtonOverlay))
+    try {
+      enableNavOverlay(ThreeButtonOverlay)
+      Thread.sleep(2_000)
+      composeRule.waitForIdle()
+
+      // A light app on a dark device: the app's own light surface, with dark icons on it.
+      setDeviceNightMode(true)
+      composeRule.waitForIdle()
+      assertFalse("The light app followed the dark device", screenIsDark())
+      assertTrue(
+        "A light app still has to ask for dark navigation-bar icons on a dark device",
+        settles { navBarAsksForDarkIcons() },
+      )
+      assertTrue(
+        "The navigation bar is not showing the app's own background: ${barColours()}",
+        navBarShowsAppBackground(),
+      )
+
+      // A dark app on a light device: the app's dark surface, with pale icons on it.
+      openSettings()
+      themeRow("Dark").performClick()
+      composeRule.waitUntil(10_000) { screenIsDark() }
+      backToFridge()
+      setDeviceNightMode(false)
+      composeRule.waitForIdle()
+      assertTrue("The app did not go dark", screenIsDark())
+      assertFalse(
+        "A dark app has to ask for pale navigation-bar icons, not the device's light bar",
+        settles { navBarAsksForDarkIcons() },
+      )
+      assertTrue(
+        "The navigation bar is not showing the app's own background: ${barColours()}",
+        navBarShowsAppBackground(),
+      )
+    } finally {
+      runBlocking { SettingsServices.preferences(appContext()).setThemeMode(ThemeMode.Light) }
+      setDeviceNightMode(null)
+      enableNavOverlay(overlay)
+    }
+  }
+
+  /**
+   * With 3-button navigation the editor still has to be reachable. The same path as the gesture
+   * check below, run against the bar that is there when a launcher offers three buttons.
    */
   @Test
   fun presetEditorWithThreeButtonNavigation_keepsTheFieldAndSaveReachable() {
@@ -977,6 +1046,58 @@ class SettingsPresetWorkflowTest {
     }
   }
 
+  /** True once the check holds, or once the frames have had their chance to settle. */
+  private fun settles(check: () -> Boolean): Boolean {
+    val deadline = System.currentTimeMillis() + 10_000
+    while (System.currentTimeMillis() < deadline) {
+      if (check()) return true
+      Thread.sleep(250)
+    }
+    return check()
+  }
+
+  /**
+   * The appearance the window requests, not the icons that were drawn: true means the app asked for
+   * dark icons on a light navigation bar. A sample of the drawn pixels is the only way to check
+   * those, and the surface check above is the one that reads pixels here.
+   */
+  private fun navBarAsksForDarkIcons(): Boolean {
+    var dark = false
+    onMainThread {
+      val window = composeRule.activity.window
+      dark = WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars
+    }
+    return dark
+  }
+
+  /** The bar, and the app just above it, as the screen actually paints them. */
+  private fun barColours(): String =
+    "bar ${hex(dominantColour(0.965f))} against app ${hex(dominantColour(0.90f))}"
+
+  private fun navBarShowsAppBackground(): Boolean =
+    colourDistance(dominantColour(0.965f), dominantColour(0.90f)) < 14
+
+  /** The colour a person sees across a band of the screen, taken from a real frame. */
+  private fun dominantColour(yFraction: Float): Int {
+    val bitmap = frame()
+    val counts = HashMap<Int, Int>()
+    val y = (bitmap.height * yFraction).toInt()
+    var x = (bitmap.width * 0.05f).toInt()
+    while (x < bitmap.width * 0.95f) {
+      val pixel = bitmap.getPixel(x, y) or (0xFF shl 24)
+      counts[pixel] = (counts[pixel] ?: 0) + 1
+      x += 12
+    }
+    return counts.maxByOrNull { it.value }?.key ?: error("could not read the screen")
+  }
+
+  private fun colourDistance(first: Int, second: Int): Int {
+    fun channel(shift: Int) = Math.abs(((first shr shift) and 0xFF) - ((second shr shift) and 0xFF))
+    return channel(16) + channel(8) + channel(0)
+  }
+
+  private fun hex(colour: Int): String = "#%06X".format(colour and 0xFFFFFF)
+
   private fun frame(): Bitmap {
     val bytes = shellBytes("screencap -p")
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: error("Could not read the screen")
@@ -993,6 +1114,10 @@ class SettingsPresetWorkflowTest {
   private fun enableNavOverlay(overlay: String) {
     shell("cmd overlay enable-exclusive $overlay")
     Thread.sleep(1_500)
+  }
+
+  private fun onMainThread(block: () -> Unit) {
+    InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
   }
 
   /**
