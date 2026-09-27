@@ -12,5 +12,5 @@ data class SettingsCallbacks(
   val onPresetDaysChange: (String) -> Unit,
   val onSavePreset: () -> Unit,
   val onCancelPreset: () -> Unit,
-  val onDismissMessage: () -> Unit,
+  val onDismissThemeError: () -> Unit,
 )

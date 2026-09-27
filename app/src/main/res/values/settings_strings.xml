@@ -26,6 +26,8 @@
     <string name="settings_preset_days_hint">Counted from the day you add the item</string>
     <string name="settings_error_name">Enter a name</string>
     <string name="settings_error_days">Use a number of days between 0 and 365</string>
+    <string name="settings_error_save">Couldn’t save this food. Try again.</string>
+    <string name="settings_error_theme">Couldn’t save the theme. Try again.</string>
     <string name="settings_save">Save</string>
     <string name="settings_saving">Saving</string>
     <string name="settings_cancel">Cancel</string>

@@ -37,8 +37,9 @@ class PresetStoreException(
 /**
  * Presets in their own preference file, separate from the fridge database and its schema.
  *
- * Only the list is stored, so a food added to [FoodPresetCatalog] later shows up with its
- * default name and duration, and ids this build does not know are still listed.
+ * Only the presets the user actually changed are stored, so a food added to [FoodPresetCatalog]
+ * later shows up with its default name and duration, a catalog fix reaches everyone who left the
+ * entry alone, and ids this build does not know are still listed.
  */
 internal class StoredPresetRepository(context: Context) : PresetRepository {
   private val preferences = context.applicationContext.getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
@@ -50,14 +51,13 @@ internal class StoredPresetRepository(context: Context) : PresetRepository {
   override suspend fun update(preset: FoodPreset): Result<Unit> =
     runSettings {
       val cleaned = cleanPreset(preset)
-      val next =
-        writes.withLock {
-          val current = state.value
-          val updated = if (current.any { it.id == cleaned.id }) current.map { if (it.id == cleaned.id) cleaned else it } else current + cleaned
-          write(updated)
-          updated
-        }
-      state.value = next
+      // Read, write, and publish under one lock: two saves in a row must both survive.
+      writes.withLock {
+        val current = state.value
+        val next = if (current.any { it.id == cleaned.id }) current.map { if (it.id == cleaned.id) cleaned else it } else current + cleaned
+        write(editedOnly(next))
+        state.value = next
+      }
     }
 
   /** Clears saved edits and republishes the bundled catalog. Test-only. */
@@ -141,3 +141,9 @@ private suspend fun <T> runSettings(block: suspend () -> T): Result<T> =
   } catch (error: Throwable) {
     Result.failure(if (error is PresetStoreException) error else PresetStoreException(error.message ?: "Couldn't save the preset", error))
   }
+
+/** Keeps only the entries that differ from the bundled catalog, so defaults can still change. */
+private fun editedOnly(list: List<FoodPreset>): List<FoodPreset> {
+  val defaults = FoodPresetCatalog.entries.associateBy(FoodPreset::id)
+  return list.filter { candidate -> defaults[candidate.id] != candidate }
+}

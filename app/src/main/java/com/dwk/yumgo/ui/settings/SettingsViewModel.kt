@@ -1,7 +1,9 @@
 package com.dwk.yumgo.ui.settings
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.dwk.yumgo.R
 import com.dwk.yumgo.data.AppPreferencesRepository
 import com.dwk.yumgo.data.FoodPreset
 import com.dwk.yumgo.data.MaxPresetExpiryDays
@@ -30,28 +32,26 @@ class SettingsViewModel(
 ) : ViewModel() {
   private val editing = MutableStateFlow<PresetEdit?>(null)
   private val savedId = MutableStateFlow<String?>(null)
-  private val message = MutableStateFlow<String?>(null)
+  private val themeError = MutableStateFlow<Int?>(null)
   private var savedFeedback: Job? = null
 
   val uiState: StateFlow<SettingsUiState> =
-    combine(presetRepository.presets, appPreferences.themeMode, editing, savedId, message) { presets, themeMode, edit, saved, notice ->
-      SettingsUiState(presets = presets, themeMode = themeMode, editing = edit, savedId = saved, message = notice)
+    combine(presetRepository.presets, appPreferences.themeMode, editing, savedId, themeError) { presets, themeMode, edit, saved, error ->
+      SettingsUiState(presets = presets, themeMode = themeMode, editing = edit, savedId = saved, themeError = error)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), initialState())
 
   fun onThemeModeChange(mode: ThemeMode) {
     if (appPreferences.themeMode.value == mode) return
-    message.value = null
+    themeError.value = null
     viewModelScope.launch {
-      appPreferences.setThemeMode(mode).onFailure { error ->
-        message.value = error.message ?: "Couldn't save the theme"
-      }
+      appPreferences.setThemeMode(mode).onFailure { themeError.value = R.string.settings_error_theme }
     }
   }
 
   fun onEditPreset(preset: FoodPreset) {
     if (editing.value?.saving == true) return
     if (editing.value?.id == preset.id) return
-    message.value = null
+    themeError.value = null
     editing.value = PresetEdit(id = preset.id, name = preset.name, days = preset.expiryDays.toString())
   }
 
@@ -93,16 +93,16 @@ class SettingsViewModel(
           editing.value = null
           showSaved(current.id)
         },
-        onFailure = { error ->
-          editing.value = editing.value?.copy(saving = false)
-          message.value = error.message ?: "Couldn't save the preset"
+        onFailure = {
+          // The editor stays open, so the reason belongs to the editor, not to a banner above.
+          editing.value = editing.value?.copy(saving = false, error = PresetEditError.SaveFailed)
         },
       )
     }
   }
 
-  fun onDismissMessage() {
-    message.value = null
+  fun onDismissThemeError() {
+    themeError.value = null
   }
 
   private fun showSaved(id: String) {
@@ -135,8 +135,12 @@ data class SettingsUiState(
   val editing: PresetEdit? = null,
   /** Preset that just saved, so the row can confirm it. */
   val savedId: String? = null,
-  /** Message for a write that failed, e.g. the theme could not be stored. */
-  val message: String? = null,
+  /**
+   * String resource for a palette write that failed, shown with the palette that did not save.
+   * A failed preset write stays in [PresetEdit.error] instead, next to the editor that failed.
+   */
+  @get:StringRes
+  val themeError: Int? = null,
 )
 
 /** Editor draft. [days] is text so the field stays editable while the user types. */
@@ -151,4 +155,5 @@ data class PresetEdit(
 enum class PresetEditError {
   BlankName,
   DaysOutOfRange,
+  SaveFailed,
 }

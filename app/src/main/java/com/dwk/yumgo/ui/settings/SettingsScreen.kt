@@ -105,7 +105,7 @@ fun SettingsScreen(
         onPresetDaysChange = viewModel::onPresetDaysChange,
         onSavePreset = viewModel::onSavePreset,
         onCancelPreset = viewModel::onCancelPreset,
-        onDismissMessage = viewModel::onDismissMessage,
+        onDismissThemeError = viewModel::onDismissThemeError,
       ),
     modifier = modifier,
   )
@@ -158,9 +158,9 @@ private fun SettingsContent(
           }
         }
       }
-      state.message?.takeIf { it.isNotBlank() }?.let { notice ->
-        item(key = "message", contentType = "message") {
-          MessageBanner(text = notice, onDismiss = callbacks.onDismissMessage)
+      state.themeError?.let { themeError ->
+        item(key = "theme-error", contentType = "error") {
+          ThemeErrorBanner(text = stringResource(themeError), onDismiss = callbacks.onDismissThemeError)
         }
       }
 
@@ -207,13 +207,13 @@ private fun ThemeRow(choice: ThemeChoice, selected: Boolean, onSelect: () -> Uni
   val container by
     animateColorAsState(
       targetValue = if (selected) scheme.secondaryContainer else scheme.surfaceContainerLowest,
-      animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
+      animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
       label = "theme-container",
     )
   val content by
     animateColorAsState(
       targetValue = if (selected) scheme.onSecondaryContainer else scheme.onSurface,
-      animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
+      animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
       label = "theme-content",
     )
   Surface(
@@ -259,7 +259,7 @@ private fun PresetCard(preset: FoodPreset, edit: PresetEdit?, saved: Boolean, ca
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
       Row(
         modifier =
-          Modifier.fillMaxWidth().clickable(
+          Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(
             enabled = edit == null,
             onClickLabel = stringResource(R.string.settings_edit_preset, preset.name),
             onClick = { callbacks.onEditPreset(preset) },
@@ -344,6 +344,15 @@ private fun PresetEditFields(edit: PresetEdit, callbacks: SettingsCallbacks) {
       keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
       keyboardActions = KeyboardActions(onDone = { callbacks.onSavePreset() }),
     )
+    if (edit.error == PresetEditError.SaveFailed) {
+      // The editor stays open on failure, so the reason shows where the tap happened.
+      Text(
+        text = stringResource(R.string.settings_error_save),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+        modifier = Modifier.padding(top = 8.dp),
+      )
+    }
     Row(
       modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
       horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
@@ -363,8 +372,9 @@ private fun PresetEditFields(edit: PresetEdit, callbacks: SettingsCallbacks) {
   }
 }
 
+/** Reports a palette write that failed, right under the palette that did not save. */
 @Composable
-private fun MessageBanner(text: String, onDismiss: () -> Unit) {
+private fun ThemeErrorBanner(text: String, onDismiss: () -> Unit) {
   Surface(
     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
     shape = MaterialTheme.shapes.large,
@@ -396,6 +406,7 @@ private fun SettingsPreview() {
           themeMode = ThemeMode.Light,
           editing = PresetEdit(id = "milk", name = "Milk", days = "9", error = PresetEditError.DaysOutOfRange),
           savedId = "chicken",
+          themeError = R.string.settings_error_theme,
         ),
       callbacks = IdleSettingsCallbacks,
     )
@@ -411,16 +422,22 @@ private val IdleSettingsCallbacks =
     onPresetDaysChange = {},
     onSavePreset = {},
     onCancelPreset = {},
-    onDismissMessage = {},
+    onDismissThemeError = {},
   )
 
-private val SettingsBack: ImageVector by lazy { settingsIcon("ArrowBack") { arrowBack() } }
+private val SettingsBack: ImageVector by lazy { settingsIcon("ArrowBack", autoMirror = true) { arrowBack() } }
 private val SettingsCheck: ImageVector by lazy { settingsIcon("Check") { check() } }
 private val SettingsNext: ImageVector by lazy { settingsIcon("Next") { next() } }
 
-private fun settingsIcon(name: String, draw: PathBuilder.() -> Unit): ImageVector =
-  ImageVector.Builder(name = name, defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
-    .apply { path(fill = SolidColor(Color.Black), pathBuilder = draw) }
+private fun settingsIcon(name: String, autoMirror: Boolean = false, draw: PathBuilder.() -> Unit): ImageVector =
+  ImageVector.Builder(
+    name = name,
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+    autoMirror = autoMirror,
+  ).apply { path(fill = SolidColor(Color.Black), pathBuilder = draw) }
     .build()
 
 private fun PathBuilder.arrowBack() {
