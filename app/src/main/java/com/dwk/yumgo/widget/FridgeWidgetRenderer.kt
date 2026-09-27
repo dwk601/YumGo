@@ -4,7 +4,6 @@ import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.text.TextPaint
@@ -32,12 +31,15 @@ internal enum class FridgeWidgetTone(val background: Int, val text: Int) {
  * the widget lists the same items, in the same order, as the fridge screen.
  *
  * The row count is worked out here, from the height the host reported and the size of the text at
- * this moment. Both are then handed to the card as fixed pixel sizes, so the launcher's own layout
- * can only reproduce the card as it was budgeted: a system font-scale change in between neither
- * clips a row nor leaves a gap, and the new scale arrives with the next refresh.
+ * this moment, and a card wide enough for two draws its rows in two columns, which is the only
+ * thing the extra width buys. Both are then handed to the card as fixed pixel sizes, so the
+ * launcher's own layout can only reproduce the card as it was budgeted: a system font-scale change
+ * in between neither clips a row nor leaves a gap, and the new scale arrives with the next refresh.
  */
 internal object FridgeWidgetRenderer {
   private const val DefaultRows = 3
+
+  /** The width from which a second column is worth it: two names side by side still read. */
   private const val TwoColumnMinWidthDp = 380f
   private const val IconDp = 18f
   private const val DividerDp = 17f
@@ -97,11 +99,11 @@ internal object FridgeWidgetRenderer {
    * Handing the host a size-keyed map is what makes the card independent of the app's own
    * rotation: the app can be in landscape while the home screen stays portrait, and guessing from
    * the app's configuration then built a portrait card with landscape's two columns. The host picks
-   * the closest size and re-picks it whenever the widget is resized or re-laid out.
+   * the closest size to the box it lays the widget out in, and re-picks it whenever the widget is
+   * resized or re-laid out.
    *
-   * Before API 31 there is no list to map, so the single card falls back to the platform's
-   * min/max options. That one still has to assume an orientation from the app's own configuration,
-   * which is wrong in the same landscape-save case until the next refresh.
+   * Before API 31 there is no list to map, so the single card falls back to the platform's min/max
+   * options. [legacySize] reads those without asking the app which way round it is.
    */
   private fun cardFor(
     context: Context,
@@ -116,7 +118,7 @@ internal object FridgeWidgetRenderer {
         }
       if (bySize.isNotEmpty()) return RemoteViews(bySize)
     }
-    return cardViews(context, legacySize(context, options), snapshot, openFridge)
+    return cardViews(context, legacySize(options), snapshot, openFridge)
   }
 
   private fun cardViews(
@@ -164,12 +166,12 @@ internal object FridgeWidgetRenderer {
     text: TextPx,
   ) {
     val total = snapshot.rows.size
-    val window = rowWindow(context, size, total)
-    // Two columns only when a whole pair still fits, so the second column is never half empty and
-    // rows are never clipped to make room for it.
-    val twoColumns = size != null && size.widthDp >= TwoColumnMinWidthDp && window.rows >= 2
-    val rows = if (twoColumns) window.rows - window.rows % 2 else window.rows
-    val hidden = total - rows
+    // A second column stands the full height of the card, so a card wide enough for two fits twice
+    // the rows in the same box. The rows are then dealt out between the columns in fridge order.
+    val twoColumns = size != null && size.widthDp >= TwoColumnMinWidthDp
+    val window = rowWindow(context, size?.heightDp, total, if (twoColumns) 2 else 1)
+    val rows = window.rows
+    val hidden = window.hidden
 
     views.setViewVisibility(R.id.widget_message, View.GONE)
     views.setViewVisibility(R.id.widget_columns, View.VISIBLE)
@@ -188,7 +190,10 @@ internal object FridgeWidgetRenderer {
     )
 
     snapshot.rows.take(rows).forEachIndexed { index, row ->
-      val column = if (twoColumns && index % 2 == 1) R.id.widget_column_end else R.id.widget_column_start
+      // The first half goes down the left column, so an odd count leaves the extra row on the right
+      // and the reading order is still the fridge's own.
+      val column =
+        if (twoColumns && index >= (rows + 1) / 2) R.id.widget_column_end else R.id.widget_column_start
       views.addView(column, rowView(context, row, text))
     }
 
@@ -243,23 +248,28 @@ internal object FridgeWidgetRenderer {
   }
 
   /**
-   * Rows for this height, and the items that leaves off the list. There is no cap: the card is a
-   * summary only because the size it was placed at is finite, and a tall card should use the room
-   * it has.
+   * How many items a card this tall shows, and how many that leaves off the list.
+   *
+   * [columns] columns each stand the full height, so what fits is the rows one column holds times
+   * the columns. There is no cap: the card is a summary only because the size it was placed at is
+   * finite, and a tall card should use the room it has.
    *
    * The "more" line is only paid for when something is actually left over, so a fridge that fits
    * gets the whole card. If it does not fit, the line is inside the budget, which is what keeps the
    * last row from being cut in half.
    */
-  private fun rowWindow(context: Context, size: WidgetSize?, total: Int): RowWindow {
-    val heightDp = size?.heightDp
-      ?: return RowWindow(DefaultRows, (total - DefaultRows).coerceAtLeast(0))
+  private fun rowWindow(context: Context, heightDp: Float?, total: Int, columns: Int): RowWindow {
+    val height = heightDp ?: return RowWindow(DefaultRows, (total - DefaultRows).coerceAtLeast(0))
     val row = rowHeightDp(context)
-    val all = ((heightDp - chromeDp(context, withFooter = false)) / row).toInt().coerceAtLeast(1)
+    val all = columns * fit(height, chromeDp(context, withFooter = false), row)
     if (total <= all) return RowWindow(total, 0)
-    val truncated = ((heightDp - chromeDp(context, withFooter = true)) / row).toInt().coerceAtLeast(1)
-    return RowWindow(truncated.coerceAtMost(total), (total - truncated).coerceAtLeast(0))
+    val rows = (columns * fit(height, chromeDp(context, withFooter = true), row)).coerceAtMost(total)
+    return RowWindow(rows, total - rows)
   }
+
+  /** Whole rows in [heightDp] once the chrome and the "more" line are paid for. */
+  private fun fit(heightDp: Float, chromeDp: Float, rowDp: Float): Int =
+    ((heightDp - chromeDp) / rowDp).toInt().coerceAtLeast(1)
 
   /**
    * Chrome above and below the rows, in dp: the header, the rule under it, the "more" line, and the
@@ -274,20 +284,30 @@ internal object FridgeWidgetRenderer {
       RootPaddingDp
 
   /**
-   * The size to build for when the host does not report a list, that is before API 31. The
-   * platform pairs the narrow width with the tall height: portrait is minWidth by maxHeight and
-   * landscape is maxWidth by minHeight. Every option is in dp.
+   * The size to build for when the host reports no list of configurations, that is before API 31.
+   *
+   * Every number here is the launcher's own, in dp. The platform reports the smallest and the
+   * largest box it will give this instance, for the orientation the home screen is in, and the two
+   * largest are bounded by the launcher's own screen: whichever of them is the taller side says
+   * which way round the home screen is. The app's configuration cannot say it, because the app can
+   * be in landscape while the home screen stays in portrait, and the card is drawn by the launcher
+   * in the launcher's configuration, not in the app's.
+   *
+   * A placement grows along the screen's short axis, which is what pairs the narrow width with the
+   * tall height in portrait and the wide one with the short height in landscape. A host that
+   * reports no maximum at all has said nothing about its orientation, so the card is built for the
+   * smallest box it did report: the one size every box it may be given can hold without clipping.
    */
-  private fun legacySize(context: Context, options: Bundle): WidgetSize? {
-    val portrait = isPortrait(context)
-    val width = options.getInt(
-      if (portrait) AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH else AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH,
-      0,
-    )
-    val height = options.getInt(
-      if (portrait) AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT else AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,
-      0,
-    )
+  private fun legacySize(options: Bundle): WidgetSize? {
+    val minWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
+    val maxWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 0)
+    val minHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0)
+    val maxHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
+    if (minWidth <= 0 || minHeight <= 0) return null
+    if (maxWidth <= 0 || maxHeight <= 0) return WidgetSize(minWidth.toFloat(), minHeight.toFloat())
+    val portrait = maxWidth <= maxHeight
+    val width = if (portrait) minWidth else maxWidth
+    val height = if (portrait) maxHeight else minHeight
     if (width <= 0 || height <= 0) return null
     return WidgetSize(widthDp = width.toFloat(), heightDp = height.toFloat())
   }
@@ -306,16 +326,6 @@ internal object FridgeWidgetRenderer {
         ?.filterIsInstance<SizeF>()
         .orEmpty()
     }.getOrDefault(emptyList())
-
-  /** Only the pre-API-31 path needs this; the host picks the size otherwise. */
-  private fun isPortrait(context: Context): Boolean {
-    val orientation = context.resources.configuration.orientation
-    if (orientation == Configuration.ORIENTATION_LANDSCAPE) return false
-    if (orientation == Configuration.ORIENTATION_PORTRAIT) return true
-    // Square or undefined, as a watch or an unfolded foldable reports: the taller box is portrait.
-    val metrics = context.resources.displayMetrics
-    return metrics.heightPixels >= metrics.widthPixels
-  }
 
   private fun rowHeightDp(context: Context): Float =
     textHeightDp(context, RowTextSp) + RowPaddingDp + RowSafetyDp

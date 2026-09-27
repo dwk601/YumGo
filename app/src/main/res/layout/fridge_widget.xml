@@ -172,11 +172,15 @@
                     android:textColor="#1C1C19"
                     android:textSize="13sp" />
 
+                <!--
+                  "Tomorrow" is a day away, so this sample wears the due-soon badge, the same one the
+                  live card puts on it. Anything past the two-day window gets the upcoming badge.
+                -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="8dp"
-                    android:background="@drawable/fridge_widget_badge_upcoming"
+                    android:background="@drawable/fridge_widget_badge_soon"
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:paddingStart="7dp"
@@ -184,7 +188,7 @@
                     android:paddingEnd="7dp"
                     android:paddingBottom="2dp"
                     android:text="@string/widget_preview_badge_three"
-                    android:textColor="#002114"
+                    android:textColor="#2D1600"
                     android:textSize="11sp" />
             </LinearLayout>
         </LinearLayout>

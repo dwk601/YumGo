@@ -9,8 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Build
 import android.os.Bundle
 import android.os.Process
+import android.util.SizeF
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -103,7 +105,7 @@ class WidgetWorkflowTest {
     composeRule.runOnUiThread { widget = host.createView(context, widgetId, info!!) }
     // Each test starts from a size the test chose. The system hands a re-bound host whatever it
     // had last, so a test that resized the card would otherwise decide the next one's row count.
-    resize(minWidthDp = 250, minHeightDp = 200)
+    resize(250, 200)
     awaitWidget(15_000) { startColumn().childCount >= 0 }
     // The app must see its own instance, or a saved write would never redraw the card.
     awaitWidget(10_000) { FridgeWidgetProvider.placedIds(context()).contains(widgetId) }
@@ -165,29 +167,65 @@ class WidgetWorkflowTest {
     assertEquals("Three items in three rows leaves nothing to hide", "", moreText())
   }
 
-  /** A wider placement spreads the rows over two even columns; a taller one fits more of them. */
+  /**
+   * The width of the card decides how many columns it has, and the height decides how many rows
+   * each of them holds, so a wider card is not a taller card with fewer rows in it: the extra
+   * width doubles what fits.
+   *
+   * Nothing here is asserted about how many rows a height really holds, because that is a
+   * measurement of the text on this device rather than a promise. What has to hold is that a bigger
+   * card never shows fewer items, and that every item is either drawn or counted in the overflow
+   * line.
+   */
   @Test
   fun placedWidget_resizeGivesMoreRowsInTwoColumns() {
     repeat(6) { add("Bulk Item $it", days = it.toLong() + 1) }
     awaitWidget { rows().isNotEmpty() }
 
-    resize(minWidthDp = 250, minHeightDp = 110)
-    awaitWidget { rows().isNotEmpty() }
+    // Narrow and short: one column, a row or two, and the rest behind the overflow line.
+    resize(250, 110)
+    awaitWidget { rows().isNotEmpty() && endColumn().visibility == View.GONE }
     val small = rows().size
     assertTrue("A 250x110 card should not fit many rows, got $small", small in 1..3)
-    assertEquals("6 items in $small rows must all be counted", "+${6 - small} more", moreText())
+    assertEverythingAccountedFor(6)
     assertEquals("A narrow card must not open a second column", View.GONE, endColumn().visibility)
 
-    resize(minWidthDp = 430, minHeightDp = 210)
-    awaitWidget { endColumn().visibility == View.VISIBLE && endColumn().childCount > 0 }
-    val start = startColumn().childCount
-    val end = endColumn().childCount
-    assertTrue("A wide card should split the rows, got $start and $end", end > 0)
-    assertEquals("A half-filled second column looks broken", 0, start - end)
-    assertTrue("A wide card should still cap the rows at four, got ${start + end}", start + end <= 4)
-    assertTrue("A bigger card should fit more than the small one did", start + end > small)
-    assertEquals("+${6 - (start + end)} more", moreText())
+    // The same height, twice the width: two columns, so twice the items in the same box.
+    resize(430, 110)
+    awaitWidget { twoEvenColumns() }
+    val wide = startColumn().childCount + endColumn().childCount
+    assertTrue("A wide card should fit more than the small one did, $wide against $small", wide > small)
+    assertEverythingAccountedFor(6)
+    withCardLaidOutAt(110) { assertNothingClipped(110) }
+
+    // The same width, with room for the whole list: all of it, over two even columns.
+    resize(430, 180)
+    awaitWidget { rows().size == 6 && twoEvenColumns() }
+    assertEquals("A 430x180 card holds all six, so nothing is hidden", "", moreText())
+    withCardLaidOutAt(180) { assertNothingClipped(180) }
+
+    // And one narrow column, as tall as the card may be, still shows all of them.
+    resize(250, 360)
+    awaitWidget { rows().size == 6 && endColumn().visibility == View.GONE }
+    assertEquals("A 250x360 card holds all six, so nothing is hidden", "", moreText())
+    withCardLaidOutAt(360) { assertNothingClipped(360) }
   }
+
+  /**
+   * Every item the card knows about is either drawn on it or counted in the overflow line. This is
+   * the one thing that has to be true at any size: a card that quietly drops an item is a card
+   * lying about the fridge.
+   */
+  private fun assertEverythingAccountedFor(total: Int) {
+    assertEquals(
+      "The card drew ${rows().size} rows and counted ${hiddenCount()} behind the overflow line",
+      total,
+      rows().size + hiddenCount(),
+    )
+  }
+
+  /** The items the overflow line says are not on the card, or none when it is not showing. */
+  private fun hiddenCount(): Int = moreText().removePrefix("+").removeSuffix(" more").toIntOrNull() ?: 0
 
   /**
    * The card is always the light palette. The app is switched to its dark theme and the card is
@@ -268,20 +306,27 @@ class WidgetWorkflowTest {
     add("Frozen Peas", days = 120)
     awaitWidget { rows().isNotEmpty() }
 
-    // Small: one row and a count of what is hidden.
-    resize(minWidthDp = 250, minHeightDp = 110)
-    awaitWidget { singleColumnOf(1) }
+    // Small: one column, a row or two, and a count of what is hidden.
+    resize(250, 110)
+    awaitWidget { endColumn().visibility == View.GONE && rows().isNotEmpty() }
+    val small = rows().size
+    assertTrue("A 250x110 card should not fit many rows, got $small", small in 1..3)
     captureCard("t5-widget-small", 110)
 
-    // Wide: two even columns. The system rounds the option it hands back, so this clears the
-    // card's own 380dp threshold instead of sitting on it, and it still fits this screen.
-    resize(minWidthDp = 400, minHeightDp = 180)
+    // Wide: two even columns, and twice the rows of the same height in one. The system rounds the
+    // option it hands back, so this clears the card's own 380dp threshold instead of sitting on it,
+    // and it still fits this screen.
+    resize(400, 180)
     awaitWidget { twoEvenColumns() }
+    val wide = startColumn().childCount + endColumn().childCount
+    assertTrue("The wide card should hold more rows than the small one, $wide against $small", wide > small)
+    assertEverythingAccountedFor(6)
     captureCard("t5-widget-wide", 180)
 
-    // Tall: one column with as many rows as fit.
-    resize(minWidthDp = 250, minHeightDp = 260)
-    awaitWidget { singleColumnOf(4) }
+    // Tall: one column, and the whole list, because the room is there.
+    resize(250, 260)
+    awaitWidget { singleColumnOf(6) }
+    assertEquals("A 250x260 card holds all six, so nothing is hidden", "", moreText())
     captureCard("t5-widget-tall", 260)
 
     // The same card on a dark device with the app in its dark theme: still the light palette.
@@ -289,13 +334,47 @@ class WidgetWorkflowTest {
     try {
       runBlocking { SettingsServices.preferences(context()).setThemeMode(ThemeMode.Dark) }
       add("Dark Device Plums", days = 4)
-      awaitWidget { singleColumnOf(4) }
+      awaitWidget { singleColumnOf(7) }
       captureCard("t5-widget-dark", 260)
       assertEquals("A dark device turned the card dark", 0xFFF7F6F2.toInt(), cardColour())
     } finally {
       runBlocking { SettingsServices.preferences(context()).setThemeMode(ThemeMode.Light) }
       setDeviceNightMode(null)
     }
+  }
+
+  /**
+   * A widget at the size a launcher gives a 3x2 placement, with a few things in the fridge.
+   *
+   * The card used to work its row count out of the smallest height a launcher might use, so at the
+   * default size it drew one row and pushed the rest behind "+1 more" with space to spare. All
+   * three have to be on the card here, because that is the placement every user starts from.
+   */
+  @Test
+  fun placedWidget_atTheDefaultThreeByTwoSize_showsEveryItem() {
+    add("Spinach", days = -1)
+    add("Oat Milk", days = 5)
+    add("Sourdough", days = 2)
+    awaitWidget { rows().isNotEmpty() }
+
+    // Start from a box that has to leave items off the list, so the check below cannot pass
+    // because the card was big enough to hold all of them all along.
+    resize(250, 110)
+    awaitWidget { moreText().isNotEmpty() }
+    assertTrue("Three items fit in a 250x110 card, so the rest of this proves nothing", rows().size < 3)
+
+    // What the system hands a host for a 3x2 placement: a small minimum it may shrink to, the
+    // size it is actually given in portrait, and the per-size list a launcher sends from API 31.
+    setLauncherDefaultSize()
+    awaitWidget(20_000) { visibleNames().size >= 3 }
+
+    val names = visibleNames()
+    assertEquals("The default card should hold all three", 3, names.size)
+    assertTrue("Spinach is missing from the default card: $names", names.any { it.startsWith("Spinach") })
+    assertTrue("Oat Milk is missing from the default card: $names", names.any { it.startsWith("Oat Milk") })
+    assertTrue("Sourdough is missing from the default card: $names", names.any { it.startsWith("Sourdough") })
+    // Nothing is left hiding behind the overflow line while there is room on the card.
+    assertEquals("Nothing should be left in the overflow at this size", "", moreText())
   }
 
   private fun singleColumnOf(rows: Int): Boolean =
@@ -311,7 +390,19 @@ class WidgetWorkflowTest {
    * Attaches the rendered card to the activity, photographs it, and puts the app back. The card is
    * given the screen to lay out in, because a view nothing hosts measures itself to nothing.
    */
-  private fun captureCard(tag: String, heightDp: Int) {
+  private fun captureCard(tag: String, heightDp: Int) =
+    withCardLaidOutAt(heightDp) {
+      assertNothingClipped(heightDp)
+      Thread.sleep(500)
+      shell("screencap -p /data/local/tmp/$tag.png")
+    }
+
+  /**
+   * Lays the card out in a box of this height on the real screen, runs [block], and takes the card
+   * off again. A card that no window hosts measures itself to nothing, so this is the only way to
+   * read back what the host would really draw at a size.
+   */
+  private fun withCardLaidOutAt(heightDp: Int, block: () -> Unit) {
     val context = context()
     val card = requireNotNull(widget)
     composeRule.runOnUiThread {
@@ -329,10 +420,36 @@ class WidgetWorkflowTest {
       )
     }
     composeRule.waitForIdle()
-    Thread.sleep(500)
-    shell("screencap -p /data/local/tmp/$tag.png")
-    composeRule.runOnUiThread { (card.parent as? ViewGroup)?.removeView(card) }
-    composeRule.waitForIdle()
+    try {
+      block()
+    } finally {
+      composeRule.runOnUiThread { (card.parent as? ViewGroup)?.removeView(card) }
+      composeRule.waitForIdle()
+    }
+  }
+
+  /**
+   * Nothing the card drew may fall outside the area it draws into.
+   *
+   * The row count is worked out when the card is built and the text is measured when the host lays
+   * it out, so a budget one row too generous is only visible here: the host clips the tail of the
+   * list. The card has to be on screen and laid out before this can be read, so it runs from
+   * inside [withCardLaidOutAt].
+   */
+  private fun assertNothingClipped(heightDp: Int) {
+    val card = requireNotNull(widget)
+    val area = card.findViewById<View>(R.id.widget_columns) ?: return
+    if (area.visibility != View.VISIBLE || area.height == 0) return
+    val drawn = rows()
+    if (drawn.isEmpty()) return
+    val over = drawn.maxBy { it.bottom }.bottom - area.height
+    assertTrue(
+      "The card at ${heightDp}dp drew a row the host had to cut off, by ${-over}px",
+      over <= ClipTolerancePx,
+    )
+    drawn.forEach { row ->
+      assertTrue("A row at ${heightDp}dp was drawn above the area it belongs in", row.top >= -ClipTolerancePx)
+    }
   }
 
   private fun setDeviceNightMode(night: Boolean?) {
@@ -587,17 +704,71 @@ class WidgetWorkflowTest {
     composeRule.waitUntil(10_000) { composeRule.onAllNodes(hasText(name)).fetchSemanticsNodes().isEmpty() }
   }
 
-  private fun resize(minWidthDp: Int, minHeightDp: Int) {
+  /**
+   * Puts the placed instance in a box of this size, the way a launcher does.
+   *
+   * A launcher reports three things, and the card needs all of them: the smallest box it might
+   * shrink the widget to, the largest it might grow it to, and, from API 31, the size it is
+   * actually drawing for each orientation. Sending only the minimum, as this harness used to, is
+   * not a box any launcher sends, and a card that reads the list a real launcher sends had nothing
+   * to budget from: it fell back to a size built out of a maximum the harness never set.
+   *
+   * Every option is in dp, which is what the platform documents and what the launcher on this
+   * device sends. The smallest height is the one a landscape placement would be given, so a card
+   * that budgets from the minimum again shows one row over a mostly empty card.
+   *
+   * Reporting the box is only half of it. A host picks the card for the size the widget is actually
+   * laid out in, so the card is put in a window of that height as well: a card that is never laid
+   * out is a card no host would ever choose, and the row count under test would be the one left
+   * over from the size before.
+   */
+  private fun resize(widthDp: Int, heightDp: Int) {
     val context = context()
     val options =
       Bundle().apply {
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, dp(context, minWidthDp))
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, dp(context, minHeightDp))
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, minOf(widthDp, ShrinkWidthDp))
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, minOf(heightDp, ShrinkHeightDp))
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, widthDp)
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, heightDp)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          // The sizes the launcher is drawing, one per orientation, in dp.
+          putParcelableArrayList(
+            AppWidgetManager.OPTION_APPWIDGET_SIZES,
+            arrayListOf(SizeF(widthDp.toFloat(), heightDp.toFloat())),
+          )
+        }
       }
     composeRule.runOnUiThread {
       AppWidgetManager.getInstance(context).updateAppWidgetOptions(widgetId, options)
     }
+    withCardLaidOutAt(heightDp) {}
   }
+
+  /**
+   * The size a launcher gives a 3x2 placement: the full width of the screen, and the height the
+   * integration review measured on the Pixel launcher.
+   */
+  private fun setLauncherDefaultSize() = resize(screenWidthDp(), LauncherDefaultHeightDp)
+
+  /** The width of the screen in dp, which is what a full-width placement is given. */
+  private fun screenWidthDp(): Int {
+    val reported =
+      shell("wm size")
+        .lines()
+        .firstOrNull { it.contains("Physical size") }
+        ?.substringAfter("Physical size:")
+        ?.split("x")
+        ?.firstOrNull()
+        ?.trim()
+        ?.toIntOrNull()
+    return (reported ?: 1080) / density().toInt()
+  }
+
+  private fun density(): Float = context().resources.displayMetrics.density
+
+  /** The names the card is actually drawing, in the order it draws them. */
+  private fun visibleNames(): List<String> =
+    rows().indices.mapNotNull { index -> rowName(index)?.takeIf { it.isNotBlank() } }
 
   private fun dp(context: Context, value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
 
@@ -633,6 +804,14 @@ class WidgetWorkflowTest {
     const val CardProbeWidth = 420
     const val CardProbeHeight = 240
     const val TwoDaysSeconds = 2 * 24 * 60 * 60L
+    /** What the Pixel launcher hands a 3x2 placement on this screen. */
+    const val LauncherDefaultHeightDp = 234
+    /** The provider's smallest width, which is the narrower a launcher shrinks the card. */
+    const val ShrinkWidthDp = 180
+    /** The height a landscape placement of this card would be given. */
+    const val ShrinkHeightDp = 150
+    /** Rounding slack, in px, for a row that ends right on the edge of its area. */
+    const val ClipTolerancePx = 2
   }
 }
 
