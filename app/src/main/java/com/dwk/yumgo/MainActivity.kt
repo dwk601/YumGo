@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
     val preferences: AppPreferencesRepository = SettingsServices.preferences(this)
     // The default styles follow the device, so a light app on a dark device would start with a
     // dark scrim and light icons on API 26-28. Ask for the saved choice instead.
-    enableEdgeToEdge(systemBarStyle(preferences.themeMode.value.resolvesDark(isSystemDark(this))))
+    applySystemBars(this, preferences.themeMode.value.resolvesDark(isSystemDark(this)))
 
     setContent {
       val themeMode by preferences.themeMode.collectAsStateWithLifecycle()
@@ -65,7 +65,17 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun SystemBarsFollowTheme(darkTheme: Boolean) {
   val activity = LocalActivity.current as? ComponentActivity ?: return
-  SideEffect { activity.enableEdgeToEdge(systemBarStyle(darkTheme)) }
+  SideEffect { applySystemBars(activity, darkTheme) }
+}
+
+/**
+ * Both bars get the same style. Leaving the navigation bar on the default makes it follow the
+ * device instead, which on 3-button navigation paints a grey scrim with pale icons under a
+ * light app on a dark device.
+ */
+private fun applySystemBars(activity: ComponentActivity, darkTheme: Boolean) {
+  val style = systemBarStyle(darkTheme)
+  activity.enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
 }
 
 /** A light palette wants dark icons on a clear bar; a dark palette wants the opposite. */
