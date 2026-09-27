@@ -2,12 +2,15 @@ package com.dwk.yumgo
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
@@ -18,6 +21,7 @@ import com.dwk.yumgo.data.SettingsServices
 import com.dwk.yumgo.data.ThemeMode
 import java.io.FileInputStream
 import java.util.Locale
+import kotlin.math.pow
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertTrue
@@ -29,6 +33,12 @@ import org.junit.runner.RunWith
 /**
  * The navigation bar as a person sees it: pixels, not the flags the app asks for.
  *
+ * The band the app paints under the platform's buttons lives in
+ * [com.dwk.yumgo.ui.common.NavigationBarBand], which every window that can end up behind the bar
+ * has to compose: the activity's, and the add sheet's, which is a window of its own. The screens
+ * have the other half of the bargain, keeping their controls clear of a bar that sits on a side
+ * when the phone is turned, which is what the last test here is about.
+ *
  * With the gesture handle the platform draws a pill and takes its colour from this window. With the
  * buttons it draws those itself, and on API 35 it takes their colour from the *device* whatever the
  * app asks for, so an app that picked the other palette got pale buttons on its own light paper at
@@ -38,8 +48,7 @@ import org.junit.runner.RunWith
  *
  * The navigation mode, the device's night setting and its rotation belong to the device, and all
  * three are put back the way they were found.
- */
-@RunWith(AndroidJUnit4::class)
+ */@RunWith(AndroidJUnit4::class)
 class NavBarWorkflowTest {
   @get:Rule val composeRule = createAndroidComposeRule<MainActivity>()
 
@@ -128,9 +137,127 @@ class NavBarWorkflowTest {
   @Test
   fun navigationButtons_stayReadableWithTheBarOnASide() {
     setDeviceNightMode(true)
-    rotateToLandscape()
+    rotateTo(1)
     assertAppIsLight("a light app on a dark device, turned sideways")
     assertButtonsAreReadable("a light app on a dark device, turned sideways")
+  }
+
+  /**
+   * The add sheet is a window of its own and draws over the activity's, so the band has to be in
+   * that window too. Adding an item is the main flow, and the keyboard is not always up: a person
+   * puts it away to look at what they typed, and the bar is then the app's last word.
+   */
+  @Test
+  fun navigationButtons_stayReadableWithTheAddSheetOpen() {
+    setDeviceNightMode(true)
+    openTheAddSheetWithoutTheKeyboard()
+    assertButtonsAreReadable("the add sheet, a light app on a dark device")
+  }
+
+  /**
+   * The bar is painted over the window, so anything the screens leave under a bar on a side is
+   * under the band. The way into settings has to stay visible and tappable either way round, or the
+   * only way to change the palette disappears in landscape.
+   */
+  @Test
+  fun settingsStaysReachableWithTheBarOnEitherSide() {
+    setDeviceNightMode(true)
+    rotateTo(1)
+    assertSettingsIsReachable("with the bar on the right")
+
+    rotateTo(3)
+    assertSettingsIsReachable("with the bar on the left")
+  }
+
+  /** The sheet as a person leaves it: opened, with the keyboard put away again. */
+  private fun openTheAddSheetWithoutTheKeyboard() {
+    eventually("The add sheet never opened") {
+      runCatching { composeRule.onNodeWithContentDescription("Add").performSemanticsAction(SemanticsActions.OnClick) }
+      if (composeRule.onAllNodesWithText("Add to the fridge").fetchSemanticsNodes().isEmpty()) {
+        "The add sheet never opened"
+      } else {
+        null
+      }
+    }
+    // The first Back puts the keyboard away and leaves the sheet up, the second closes the sheet.
+    navBarShell("input keyevent 4")
+    eventually("The keyboard never went away") {
+      if (isKeyboardUp()) "The keyboard is still over the sheet" else null
+    }
+    assertTrue(
+      "Putting the keyboard away closed the sheet",
+      composeRule.onAllNodesWithText("Add to the fridge").fetchSemanticsNodes().isNotEmpty(),
+    )
+  }
+
+  private fun isKeyboardUp(): Boolean {
+    var up = false
+    onMainThread {
+      val insets = ViewCompat.getRootWindowInsets(composeRule.activity.window.decorView)
+      up = insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
+    }
+    return up
+  }
+
+  /**
+   * The settings button is the only way into the palette. It has to be clear of the band, and a
+   * tap on it has to open the settings, which is the whole promise of the button.
+   */
+  private fun assertSettingsIsReachable(what: String) {
+    val settings = composeRule.onNodeWithContentDescription("Settings")
+    eventually("$what: the Settings button is not on the screen") {
+      val bounds =
+        runCatching { settings.fetchSemanticsNode().boundsInRoot }
+          .getOrNull()
+          ?: return@eventually "$what: there is no Settings button on the screen"
+      val bar = barInRoot()
+      if (bar.overlaps(bounds)) {
+        "$what: the band covers the Settings button, which sits at $bounds under a bar at $bar"
+      } else {
+        null
+      }
+    }
+    settings.performClick()
+    eventually("$what: tapping Settings never opened the settings") {
+      if (composeRule.onAllNodesWithText("Premade items").fetchSemanticsNodes().isEmpty()) {
+        "$what: tapping Settings did not open the settings"
+      } else {
+        null
+      }
+    }
+    // A palette row has to be reachable too, or the palette is behind the band as well.
+    eventually("$what: the theme rows are under the band") {
+      val bounds =
+        runCatching { composeRule.onNode(hasClickAction() and hasText("Dark", substring = true)).fetchSemanticsNode().boundsInRoot }
+          .getOrNull()
+          ?: return@eventually "$what: there are no theme rows on the settings screen"
+      val bar = barInRoot()
+      if (bar.overlaps(bounds)) "$what: the band covers the theme rows, at $bounds under a bar at $bar" else null
+    }
+    composeRule.onNodeWithContentDescription("Back").performSemanticsAction(SemanticsActions.OnClick)
+    eventually("$what: the fridge never came back") {
+      if (composeRule.onAllNodesWithText("Fridge").fetchSemanticsNodes().isEmpty()) {
+        "$what: the fridge never came back"
+      } else {
+        null
+      }
+    }
+  }
+
+  /**
+   * Where the band is drawn, in the coordinates the semantics tree reports. The window covers the
+   * whole screen, so the root's size is the screen's and the insets place the band in both.
+   */
+  private fun barInRoot(): Rect {
+    val root = composeRule.onRoot().fetchSemanticsNode().size
+    val bar = navigationBar()
+    val width = root.width.toFloat()
+    val height = root.height.toFloat()
+    return when {
+      bar.bottom >= bar.right && bar.bottom >= bar.left -> Rect(0f, height - bar.bottom, width, height)
+      bar.right >= bar.left -> Rect(width - bar.right, 0f, width, height)
+      else -> Rect(0f, 0f, bar.left.toFloat(), height)
+    }
   }
 
   // ------------------------------------------------------------- the pixels --
@@ -232,13 +359,23 @@ class NavBarWorkflowTest {
     return bar
   }
 
-  private fun rotateToLandscape() {
+  private fun rotateTo(userRotation: Int) {
     navBarShell("settings put system accelerometer_rotation 0")
-    navBarShell("settings put system user_rotation 1")
-    eventually("The phone never turned sideways") { if (isTurnedSideways()) null else "The phone is still upright" }
+    navBarShell("settings put system user_rotation $userRotation")
+    eventually("The phone never turned to $userRotation") {
+      val turned = isTurnedTo(userRotation)
+      val bar = navigationBar()
+      val onTheRight = bar.right > 0 && bar.right >= bar.left
+      val onTheLeft = bar.left > 0 && bar.left > bar.right
+      when (userRotation) {
+        0 -> if (turned) null else "the phone is not upright"
+        1 -> if (turned && onTheRight) null else "the bar is not on the right, the insets are $bar"
+        else -> if (turned && onTheLeft) null else "the bar is not on the left, the insets are $bar"
+      }
+    }
   }
 
-  private fun isTurnedSideways(): Boolean {
+  private fun isTurnedTo(userRotation: Int): Boolean {
     var width = 0
     var height = 0
     onMainThread {
@@ -246,7 +383,7 @@ class NavBarWorkflowTest {
       width = view.width
       height = view.height
     }
-    return width > height
+    return if (userRotation % 2 == 0) height >= width else width > height
   }
 
   /** The colour a person would call the app light or dark, from the middle of a real frame. */
@@ -381,8 +518,16 @@ class NavBarWorkflowTest {
     return (high + 0.05) / (low + 0.05)
   }
 
+  /**
+   * The relative luminance WCAG 2.2 defines: each channel linearised first, then weighted. The
+   * plain weighted average of the raw bytes reads a little high on dark colours, which would make
+   * dark buttons on a light bar look worse than they are.
+   */
   private fun luminance(colour: Int): Double {
-    fun channel(shift: Int) = ((colour shr shift) and 0xFF) / 255.0
+    fun channel(shift: Int): Double {
+      val raw = ((colour shr shift) and 0xFF) / 255.0
+      return if (raw <= 0.03928) raw / 12.92 else ((raw + 0.055) / 1.055).pow(2.4)
+    }
     return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
   }
 
