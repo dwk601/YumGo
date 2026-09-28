@@ -1,0 +1,34 @@
+<resources>
+    <string name="settings_title">Settings</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_dismiss">Dismiss</string>
+
+    <string name="settings_appearance_title">Appearance</string>
+    <string name="settings_appearance_body">YumGo is light unless you choose otherwise.</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_light_body">Bright and clear, the default</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_theme_dark_body">Dim, easy on the eyes at night</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_system_body">Follow the device setting</string>
+
+    <string name="settings_presets_title">Premade items</string>
+    <string name="settings_presets_body">Tap a food to change its name or how many days it usually keeps. Add items with one tap, then adjust anything before saving.</string>
+    <string name="settings_presets_note">These are suggestions, not a food-safety promise. Check the date on the pack.</string>
+    <string name="settings_edit_preset">Edit %1$s</string>
+    <plurals name="settings_preset_days">
+        <item quantity="one">%d day</item>
+        <item quantity="other">%d days</item>
+    </plurals>
+    <string name="settings_preset_saved">Saved</string>
+    <string name="settings_preset_name_label">Name</string>
+    <string name="settings_preset_days_label">Days</string>
+    <string name="settings_preset_days_hint">Counted from the day you add the item</string>
+    <string name="settings_error_name">Enter a name</string>
+    <string name="settings_error_days">Use a number of days between 0 and 365</string>
+    <string name="settings_error_save">Couldn’t save this food. Try again.</string>
+    <string name="settings_error_theme">Couldn’t save the theme. Try again.</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_saving">Saving</string>
+    <string name="settings_cancel">Cancel</string>
+</resources>
