@@ -166,14 +166,18 @@ class PhotoAiWorkflowTest {
     composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Retry Pear")
 
     PhotoStoreHolder.analyzerForTests = fake
-    composeRule.onNodeWithTag("analyzePhotoButton").performClick()
+    // The keyboard is up from typing: bring the button into the shrunk viewport first, or the
+    // tap lands outside it and analysis never starts.
+    composeRule.onNodeWithTag("analyzePhotoButton").performScrollTo()
+    composeRule.onNodeWithTag("analyzePhotoButton").assertIsDisplayed().performClick()
     composeRule.waitUntil(15_000) { nodeCount(hasTestTag("analysisError")) > 0 }
     composeRule.onNodeWithText("Couldn’t analyze the photo. You can keep typing.").assertIsDisplayed()
     // The typed draft survived the failure.
     composeRule.onNode(hasSetTextAction() and hasText("Retry Pear", substring = true)).assertIsDisplayed()
 
     fake.result = PhotoAiTestFixtures.detected()
-    composeRule.onNodeWithTag("analyzePhotoButton").performClick()
+    composeRule.onNodeWithTag("analyzePhotoButton").performScrollTo()
+    composeRule.onNodeWithTag("analyzePhotoButton").assertIsDisplayed().performClick()
     composeRule.waitUntil(15_000) { nodeCount(hasText("Detected expiry")) > 0 }
     assertEquals(2, fake.calls)
     assertEquals(fake.seenRefs[0], fake.seenRefs[1])
@@ -402,7 +406,8 @@ class PhotoAiWorkflowTest {
       composeRule.onNodeWithTag("analyzePhotoButton")
         .fetchSemanticsNode().boundsInWindow.bottom <= ime.toFloat(),
     )
-    composeRule.onNodeWithText("Save").performScrollTo()
+    // Save sits in the fixed editor action row outside the scroll content: no scrollTo,
+    // just the bounds check.
     assertTrue(
       "Save under IME",
       composeRule.onNodeWithText("Save").fetchSemanticsNode().boundsInWindow.bottom <= ime.toFloat(),
