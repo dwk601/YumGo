@@ -51,7 +51,9 @@ import com.dwk.yumgo.theme.LightColorScheme
  * is a no-op for an app targeting API 35. The bar is the one thing left, so it takes the polarity the
  * device's buttons need, in a tone of the app's own palette: the `surfaceContainer` of the palette
  * the app is not painting with. Both tones clear 7:1 against the buttons, where a slab of pure
- * black or white would not sit with the paper.
+ * black or white would not sit with the paper. That is the band undimmed; under the turned add
+ * sheet's dim it measured 10.7:1 for a light app and 3.54:1 for a dark one, so the dimmed light
+ * tone keeps only a small margin over 3:1.
  *
  * Three cases get nothing, because the buttons are already carried or hidden. A bar no taller than
  * the gesture handle, which is how the two are told apart, and a palette that already matches the
