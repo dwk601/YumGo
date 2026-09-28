@@ -111,6 +111,12 @@ data class ItemDraft(
   val expiryProvenance: ExpiryProvenance? = null,
   /** Assumptions behind an estimate, shown with the provenance when present. */
   val analysisNote: String? = null,
+  /**
+   * True for drafts started from the Add photo button. Only these suppress the
+   * name autofocus/keyboard on open; typed-first drafts keep the existing focus
+   * behavior even after a photo is attached.
+   */
+  val photoFirst: Boolean = false,
 )
 
 /**

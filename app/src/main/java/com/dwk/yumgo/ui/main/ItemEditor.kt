@@ -181,7 +181,9 @@ fun ItemEditor(
             compact = compact,
             // A photo-first draft is for review, not typing: the keyboard stays down
             // until the user taps the name field.
-            requestFocus = draft.id == null && draft.photoReference == null,
+            // Only photo-first drafts skip autofocus; typed-first drafts keep it
+            // even after a photo is attached, including across recreation.
+            requestFocus = draft.id == null && !draft.photoFirst,
             sheetState = sheetState,
           )
         }
@@ -937,19 +939,13 @@ private fun PhotoAnalysisRow(draft: ItemDraft, callbacks: FridgeCallbacks, modif
         }
       }
       is PhotoAnalysisUi.Unavailable -> {
+        // No retry: without a key there is nothing a retry could do. Typing stays available.
         Text(
           text = stringResource(R.string.photo_ai_unavailable),
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("analysisError"),
         )
-        OutlinedButton(
-          onClick = callbacks.onAnalyzePhoto,
-          enabled = !draft.saving,
-          modifier = Modifier.padding(top = 8.dp).heightIn(min = 48.dp).testTag("analyzePhotoButton"),
-        ) {
-          Text(stringResource(R.string.photo_ai_retry))
-        }
       }
       is PhotoAnalysisUi.Idle -> {
         OutlinedButton(
