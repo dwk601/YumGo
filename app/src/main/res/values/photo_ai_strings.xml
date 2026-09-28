@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Distinct photo-first entry. -->
+    <string name="photo_ai_add_photo">Add photo</string>
+    <!-- Compact source menu. The picker needs no storage permission. -->
+    <string name="photo_ai_source_title">Add a photo</string>
+    <string name="photo_ai_source_body">A photo starts a draft you can review before saving.</string>
+    <string name="photo_ai_source_camera">Take photo</string>
+    <string name="photo_ai_source_picker">Choose photo</string>
+    <string name="photo_ai_source_picker_note">No permission needed for photos already on this device.</string>
+    <string name="photo_ai_source_dismiss">Cancel</string>
+    <!-- Review UI: analysis action, progress, errors, provenance. -->
+    <string name="photo_ai_analysis_label">Photo analysis</string>
+    <string name="photo_ai_analyze">Analyze photo</string>
+    <string name="photo_ai_retry">Try again</string>
+    <string name="photo_ai_analyzing">Analyzing the photo…</string>
+    <string name="photo_ai_cloud_note">Analysis sends this photo to cloud AI. Suggestions stay editable until you save.</string>
+    <string name="photo_ai_provenance_detected">Detected expiry</string>
+    <string name="photo_ai_provenance_estimated">Estimated expiry</string>
+    <string name="photo_ai_estimate_note">An estimate only — check before use.</string>
+    <string name="photo_ai_error">Couldn’t analyze the photo. You can keep typing.</string>
+    <string name="photo_ai_unavailable">AI analysis isn’t available. You can keep typing.</string>
+</resources>

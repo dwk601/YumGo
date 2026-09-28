@@ -4,6 +4,33 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
 }
 
+/**
+ * OpenRouter key for photo AI, read at build time from the OPENROUTER_API_KEY environment
+ * variable or Gradle property (e.g. `-POPENROUTER_API_KEY=...` or `~/.gradle/gradle.properties`).
+ * Provider-based so the configuration cache stays valid; blank means the analyzer reports
+ * Unavailable and never uploads. Never commit a key.
+ */
+val openRouterApiKey: String = providers.environmentVariable("OPENROUTER_API_KEY")
+  .orElse(providers.gradleProperty("OPENROUTER_API_KEY"))
+  .orElse("")
+  .get()
+
+/** Quote a string for buildConfigField("String", ...) . */
+fun String.toBuildConfigLiteral(): String = buildString {
+  append('"')
+  for (char in this@toBuildConfigLiteral) {
+    when (char) {
+      '\\' -> append("\\\\")
+      '"' -> append("\\\"")
+      '\n' -> append("\\n")
+      '\r' -> append("\\r")
+      '\t' -> append("\\t")
+      else -> if (char < ' ') append("\\u%04x".format(char.code)) else append(char)
+    }
+  }
+  append('"')
+}
+
 android {
     namespace = "com.dwk.yumgo"
     compileSdk = 36
@@ -14,6 +41,8 @@ android {
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Empty when no key is supplied; the analyzer then reports Unavailable and never uploads.
+        buildConfigField("String", "OPENROUTER_API_KEY", openRouterApiKey.toBuildConfigLiteral())
     }
 
     buildTypes {
@@ -29,7 +58,7 @@ android {
     buildFeatures {
       compose = true
       aidl = false
-      buildConfig = false
+      buildConfig = true
       shaders = false
     }
 

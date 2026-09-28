@@ -100,6 +100,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextRange
@@ -178,7 +179,11 @@ fun ItemEditor(
             callbacks = callbacks,
             presets = presets,
             compact = compact,
-            requestFocus = draft.id == null,
+            // A photo-first draft is for review, not typing: the keyboard stays down
+            // until the user taps the name field.
+            // Only photo-first drafts skip autofocus; typed-first drafts keep it
+            // even after a photo is attached, including across recreation.
+            requestFocus = draft.id == null && !draft.photoFirst,
             sheetState = sheetState,
           )
         }
@@ -543,6 +548,7 @@ private fun EditorFields(
     })
     Spacer(Modifier.height(16.dp))
     PhotoRow(draft = draft, callbacks = callbacks, onMessageBounds = onMessageBounds)
+    PhotoAnalysisRow(draft = draft, callbacks = callbacks)
     Spacer(Modifier.height(8.dp))
     if (draft.id != null) {
       TextButton(
@@ -879,6 +885,107 @@ private fun PhotoRow(draft: ItemDraft, callbacks: FridgeCallbacks, onMessageBoun
       modifier = Modifier.heightIn(min = 48.dp),
     ) {
       Text(pick)
+    }
+  }
+}
+
+/**
+ * Cloud photo analysis for a photo draft. Typed drafts without a photo never see it.
+ * The name and expiry above stay editable: suggestions land on the draft fields and the
+ * provenance below only says where the date came from. An estimate is labelled as one,
+ * never as a safe-use date. Failures and a missing key are recoverable: the draft keeps
+ * what the user typed and the same button retries.
+ */
+@Composable
+private fun PhotoAnalysisRow(draft: ItemDraft, callbacks: FridgeCallbacks, modifier: Modifier = Modifier) {
+  if (draft.photoReference == null) return
+  val analyzing = draft.analysis is PhotoAnalysisUi.Analyzing
+  Column(modifier.fillMaxWidth().padding(top = 16.dp)) {
+    Text(text = stringResource(R.string.photo_ai_analysis_label), style = MaterialTheme.typography.labelLarge)
+    Text(
+      text = stringResource(R.string.photo_ai_cloud_note),
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.padding(top = 4.dp),
+    )
+    when (val analysis = draft.analysis) {
+      is PhotoAnalysisUi.Analyzing -> {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(min = 48.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          LoadingIndicator(modifier = Modifier.size(24.dp).testTag("analysisProgress"))
+          Text(
+            text = stringResource(R.string.photo_ai_analyzing),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+      is PhotoAnalysisUi.Failed -> {
+        Text(
+          text = analysis.message?.takeIf { it.isNotBlank() } ?: stringResource(R.string.photo_ai_error),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.error,
+          modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("analysisError"),
+        )
+        OutlinedButton(
+          onClick = callbacks.onAnalyzePhoto,
+          enabled = !draft.saving,
+          modifier = Modifier.padding(top = 8.dp).heightIn(min = 48.dp).testTag("analyzePhotoButton"),
+        ) {
+          Text(stringResource(R.string.photo_ai_retry))
+        }
+      }
+      is PhotoAnalysisUi.Unavailable -> {
+        // No retry: without a key there is nothing a retry could do. Typing stays available.
+        Text(
+          text = stringResource(R.string.photo_ai_unavailable),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("analysisError"),
+        )
+      }
+      is PhotoAnalysisUi.Idle -> {
+        OutlinedButton(
+          onClick = callbacks.onAnalyzePhoto,
+          enabled = !draft.saving && !analyzing,
+          modifier = Modifier.padding(top = 8.dp).heightIn(min = 48.dp).testTag("analyzePhotoButton"),
+        ) {
+          Text(stringResource(R.string.photo_ai_analyze))
+        }
+      }
+    }
+    val provenance = draft.expiryProvenance
+    if (provenance != null) {
+      Text(
+        text =
+          stringResource(
+            if (provenance == ExpiryProvenance.Detected) R.string.photo_ai_provenance_detected
+            else R.string.photo_ai_provenance_estimated,
+          ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("expiryProvenance"),
+      )
+      if (provenance == ExpiryProvenance.Estimated) {
+        Text(
+          text = stringResource(R.string.photo_ai_estimate_note),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        )
+      }
+      val note = draft.analysisNote
+      if (!note.isNullOrBlank()) {
+        Text(
+          text = note,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        )
+      }
     }
   }
 }
