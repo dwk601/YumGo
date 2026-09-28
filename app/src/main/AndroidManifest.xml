@@ -3,6 +3,9 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Photo AI uploads a resized, metadata-free label photo to OpenRouter only when the user asks for analysis. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Camera hardware is optional. Typing an item must still work. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
