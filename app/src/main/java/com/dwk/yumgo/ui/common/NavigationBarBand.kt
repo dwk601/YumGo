@@ -127,8 +127,9 @@ fun BoxScope.NavigationBarBand(reachesTheScreenEdge: Boolean = true) {
 }
 
 /**
- * The bar's own surface, painted by a view on top of the window's content: the last thing that
- * window's content draws, so it is over the sheet and under the dim the sheet puts on the app.
+ * The bar's own surface, painted by a view added to the window's content after the sheet's layout.
+ * That layout is raised by its elevation, so it is still drawn after the view: the band sits beside
+ * the sheet's card, not over it, and under the dim the sheet puts on the app.
  *
  * The view goes in once per window and is never taken out again: the window owns its content view
  * and pulls a child out from under it while the window is detaching, which is a crash. After that it
@@ -173,7 +174,7 @@ private fun BarEdge(
   }
 }
 
-/** A view of the bar's own size and colour, on the last layer of the window's content. */
+/** A view of the bar's own size and colour, added last to the window's content, below the raised sheet. */
 private fun bandOn(window: Window): View? {
   val content = window.findViewById(android.R.id.content) as? ViewGroup ?: return null
   val band = View(window.context)
