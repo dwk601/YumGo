@@ -64,6 +64,9 @@ class OpenRouterPhotoAnalyzer(
             }
           }
         try {
+          // The watcher above finishes without suspending when the job is already cancelling,
+          // so re-check before touching the socket: a dead job must never start the upload.
+          ensureActive()
           val content = runInterruptible { execute(connection, requestBody) }
           ensureActive()
           parseModelContent(content)
