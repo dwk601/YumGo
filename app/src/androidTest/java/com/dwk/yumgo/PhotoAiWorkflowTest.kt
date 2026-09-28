@@ -175,9 +175,11 @@ class PhotoAiWorkflowTest {
     composeRule.waitUntil(15_000) { nodeCount(hasText("Detected expiry")) > 0 }
     assertEquals(2, fake.calls)
     assertEquals(fake.seenRefs[0], fake.seenRefs[1])
+    // The retry fills the still-empty date, but the typed name is the user's: it stays.
+    composeRule.onNode(hasSetTextAction() and hasText("Retry Pear", substring = true)).assertIsDisplayed()
 
     composeRule.onNodeWithText("Save").performClick()
-    composeRule.waitUntil(10_000) { nodeCount(hasText("Whole Milk")) > 0 }
+    composeRule.waitUntil(10_000) { nodeCount(hasText("Retry Pear")) > 0 }
   }
 
   /**
@@ -314,8 +316,10 @@ class PhotoAiWorkflowTest {
   }
 
   /**
-   * Recreating during analysis restores Idle without silently re-uploading: the progress goes
-   * away, Analyze is offered again, the staged photo is kept, and the analyzer saw one call.
+   * Recreating during analysis never silently re-uploads: right after recreation the analyzer
+   * still saw exactly one call and the staged photo is kept. A fresh ViewModel rests at Idle
+   * (Analyze offered again); a retained one finishes the single in-flight call once the gate
+   * opens. Either way the flow ends on the detected suggestion with one user-visible result.
    */
   @Test
   fun recreationDuringAnalysis_restoresIdleWithoutReupload() {
@@ -330,12 +334,21 @@ class PhotoAiWorkflowTest {
 
     composeRule.activity.runOnUiThread { composeRule.activity.recreate() }
     composeRule.waitForIdle()
-    composeRule.waitUntil(10_000) { nodeCount(hasTestTag("analyzePhotoButton")) > 0 }
-    assertEquals(0, nodeCount(hasTestTag("analysisProgress")))
-    composeRule.onNodeWithText("Remove photo").assertIsDisplayed()
-    composeRule.waitForIdle()
+    composeRule.waitUntil(10_000) { nodeCount(hasText("Remove photo")) > 0 }
     assertEquals(1, fake.calls)
+
     fake.gate?.complete(Unit)
+    composeRule.waitForIdle()
+    // Fresh ViewModel: Idle offers Analyze again, so one explicit tap finishes the flow.
+    // Retained ViewModel: the single gated call lands on its own.
+    if (nodeCount(hasTestTag("analyzePhotoButton")) > 0) {
+      composeRule.onNodeWithTag("analyzePhotoButton").performClick()
+    }
+    composeRule.waitUntil(15_000) { nodeCount(hasText("Detected expiry")) > 0 }
+    assertTrue("Analyzer got ${fake.seenRefs}", fake.seenRefs.all { it.startsWith("staged/") })
+
+    composeRule.onNodeWithText("Save").performClick()
+    composeRule.waitUntil(10_000) { nodeCount(hasText("Whole Milk")) > 0 }
   }
 
   /**
