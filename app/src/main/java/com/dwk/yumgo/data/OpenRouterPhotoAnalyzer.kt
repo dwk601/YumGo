@@ -10,6 +10,7 @@ import java.time.LocalDate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,9 +46,16 @@ class OpenRouterPhotoAnalyzer(
     return try {
       withContext(Dispatchers.IO) {
         ensureActive()
-        val content = postChatCompletions(dataUrl)
-        ensureActive()
-        parseModelContent(content)
+        val requestBody = buildRequest(dataUrl)
+        val connection = openConnection()
+        try {
+          // Blocking socket I/O: interruptible on cancel, disconnected on the way out.
+          val content = runInterruptible { execute(connection, requestBody) }
+          ensureActive()
+          parseModelContent(content)
+        } finally {
+          connection.disconnect()
+        }
       }
     } catch (cancelled: CancellationException) {
       throw cancelled
@@ -60,50 +68,62 @@ class OpenRouterPhotoAnalyzer(
     }
   }
 
-  private fun postChatCompletions(dataUrl: String): String {
-    val requestBody =
-      JSONObject()
-        .put("model", model)
-        .put("temperature", TEMPERATURE)
-        .put("max_tokens", MAX_TOKENS)
-        .put(
-          "messages",
-          JSONArray().put(
-            JSONObject()
-              .put("role", "user")
-              .put(
-                "content",
-                JSONArray()
-                  .put(JSONObject().put("type", "text").put("text", promptFor(LocalDate.now())))
-                  .put(
-                    JSONObject()
-                      .put("type", "image_url")
-                      .put("image_url", JSONObject().put("url", dataUrl)),
-                  ),
-              ),
-          ),
-        )
-        .toString()
-    val connection =
-      (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
-        connectTimeout = CONNECT_TIMEOUT_MS
-        readTimeout = READ_TIMEOUT_MS
-        requestMethod = "POST"
-        doOutput = true
-        setRequestProperty("Authorization", "Bearer $apiKey")
-        setRequestProperty("Content-Type", "application/json")
-        setRequestProperty("Accept", "application/json")
-      }
-    try {
-      connection.outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
-      val status = connection.responseCode
-      val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-      val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-      if (status !in 200..299) throw IOException("OpenRouter HTTP $status")
-      return messageContent(body)
-    } finally {
-      connection.disconnect()
+  private fun buildRequest(dataUrl: String): ByteArray =
+    JSONObject()
+      .put("model", model)
+      .put("temperature", TEMPERATURE)
+      .put("max_tokens", MAX_TOKENS)
+      .put(
+        "messages",
+        JSONArray().put(
+          JSONObject()
+            .put("role", "user")
+            .put(
+              "content",
+              JSONArray()
+                .put(JSONObject().put("type", "text").put("text", promptFor(LocalDate.now())))
+                .put(
+                  JSONObject()
+                    .put("type", "image_url")
+                    .put("image_url", JSONObject().put("url", dataUrl)),
+                ),
+            ),
+        ),
+      )
+      .toString()
+      .toByteArray(Charsets.UTF_8)
+
+  private fun openConnection(): HttpURLConnection =
+    (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+      connectTimeout = CONNECT_TIMEOUT_MS
+      readTimeout = READ_TIMEOUT_MS
+      requestMethod = "POST"
+      doOutput = true
+      setRequestProperty("Authorization", "Bearer $apiKey")
+      setRequestProperty("Content-Type", "application/json")
+      setRequestProperty("Accept", "application/json")
     }
+
+  /** Runs on an interruptible thread; callers disconnect the connection afterwards. */
+  private fun execute(connection: HttpURLConnection, requestBody: ByteArray): String {
+    connection.outputStream.use { it.write(requestBody) }
+    val status = connection.responseCode
+    val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+    val body = stream?.bufferedReader(Charsets.UTF_8)?.use { readBounded(it) }.orEmpty()
+    if (status !in 200..299) throw IOException("OpenRouter HTTP $status")
+    return messageContent(body)
+  }
+
+  /** Reads at most MAX_RESPONSE_CHARS so a misbehaving server cannot grow the heap. */
+  private fun readBounded(reader: java.io.BufferedReader): String {
+    val out = StringBuilder()
+    val buffer = CharArray(4096)
+    while (out.length < MAX_RESPONSE_CHARS) {
+      val read = reader.read(buffer, 0, minOf(buffer.size, MAX_RESPONSE_CHARS - out.length))
+      if (read < 0) break
+      out.append(buffer, 0, read)
+    }
+    return out.toString()
   }
 
   /** The assistant message text; some models return it as an array of parts instead of a string. */
@@ -158,23 +178,25 @@ class OpenRouterPhotoAnalyzer(
       json.optFirstString("expiry", "expiryDate", "expiresOn")?.trim()?.takeIf { it.isNotEmpty() }
     val rawSource =
       json.optFirstString("expirySource", "expiry_source", "source")?.trim()?.lowercase()
-    val note =
+    var note =
       json
         .optFirstString("note", "assumption", "assumptions")
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
         ?.take(MAX_NOTE_CHARS)
     var expiry: LocalDate? = rawExpiry?.let(::parseExpiry)?.takeIf(::plausible)
+    // Strict provenance: only the exact labels count. Anything else — missing, "manufactured",
+    // "packed", "unknown" — drops the date, so model noise never silently becomes an expiry.
     val source =
       when {
         expiry == null -> ExpirySource.None
+        rawSource == "detected" -> ExpirySource.Detected
         rawSource == "estimated" -> ExpirySource.Estimated
-        rawSource == "none" -> ExpirySource.None
-        else -> ExpirySource.Detected
+        else -> ExpirySource.None
       }
-    // An explicit "none" label (or an unreadable date) means the date is not an expiry:
-    // manufacturing and ambiguous dates never silently become one.
     if (source == ExpirySource.None) expiry = null
+    // An estimate without assumptions is not presentable; label its basis instead.
+    if (source == ExpirySource.Estimated && note == null) note = DEFAULT_ESTIMATE_NOTE
     return PhotoAnalysisResult.Success(
       name = name,
       expiry = expiry,
@@ -224,6 +246,9 @@ class OpenRouterPhotoAnalyzer(
     const val ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
     const val CONNECT_TIMEOUT_MS = 15_000
     const val READ_TIMEOUT_MS = 60_000
+    /** Upper bound on a chat-completions body; max_tokens keeps real answers far below it. */
+    const val MAX_RESPONSE_CHARS = 32_768
+    const val DEFAULT_ESTIMATE_NOTE = "Estimated typical shelf life; no date was readable on the packaging."
     private const val TEMPERATURE = 0.2
     private const val MAX_TOKENS = 300
     private const val MAX_NAME_CHARS = 80

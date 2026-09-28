@@ -6,7 +6,7 @@ plugins {
 
 /**
  * OpenRouter key for photo AI, read at build time from the OPENROUTER_API_KEY environment
- * variable or Gradle property (e.g. `-POPENROUTER_API_KEY=...`, gradle.properties).
+ * variable or Gradle property (e.g. `-POPENROUTER_API_KEY=...` or `~/.gradle/gradle.properties`).
  * Provider-based so the configuration cache stays valid; blank means the analyzer reports
  * Unavailable and never uploads. Never commit a key.
  */
