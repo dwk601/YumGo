@@ -10,6 +10,7 @@ import java.time.LocalDate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -48,11 +49,20 @@ class OpenRouterPhotoAnalyzer(
         ensureActive()
         val requestBody = buildRequest(dataUrl)
         val connection = openConnection()
+        // HttpURLConnection's blocking write/read ignores thread interrupts, so abort the
+        // in-flight upload from a completion handler: disconnect() unblocks the socket
+        // immediately on cancel instead of uploading until the server answers or the read
+        // times out. It also fires on normal completion, where disconnect() is a harmless no-op.
+        coroutineContext.job.invokeOnCompletion { connection.disconnect() }
         try {
-          // Blocking socket I/O: interruptible on cancel, disconnected on the way out.
           val content = runInterruptible { execute(connection, requestBody) }
           ensureActive()
           parseModelContent(content)
+        } catch (error: IOException) {
+          // A handler-driven disconnect surfaces here as an IOException; report the
+          // cancellation instead of a network failure.
+          ensureActive()
+          throw error
         } finally {
           connection.disconnect()
         }
