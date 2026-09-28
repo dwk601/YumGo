@@ -62,8 +62,8 @@ import com.dwk.yumgo.theme.LightColorScheme
  * bar's side, so the band is drawn on the edge of the box it is composed in, and so is the add
  * sheet's in portrait, whose caller has given it the bar's room. Turned sideways the sheet is a card
  * in the middle of a window that covers the whole screen to dim the app, so the bar under it belongs
- * to that window and is painted there instead, over the dim: [reachesTheScreenEdge] says that the
- * content does not reach the edge.
+ * to that window and is painted there instead, under the dim the window draws over its content:
+ * [reachesTheScreenEdge] says that the content does not reach the edge.
  *
  * The bar is read from the insets of the window this is composed in, so a phone turned sideways, and
  * a device switching between the handle and the buttons while the app is open, bring it back.
@@ -109,9 +109,9 @@ fun BoxScope.NavigationBarBand(reachesTheScreenEdge: Boolean = true) {
   if (!reachesTheScreenEdge) {
     // The content stops short of the bar, which is the add sheet turned sideways: its window covers
     // the whole screen to dim the app, so the bar under it belongs to that window. A plain view in
-    // the window's decor is the only place a band can go on the bar's side there, above the dim,
-    // because the sheet's own content is a card in the middle of the screen and anything drawn
-    // outside that card is clipped away.
+    // the window's decor is the only place a band can go on the bar's side there, under the dim the
+    // window draws over its content, because the sheet's own content is a card in the middle of the
+    // screen and anything drawn outside that card is clipped away.
     BarEdge(window, colour, width, onTheBottom, onTheRight, ltr)
     return
   }
@@ -126,7 +126,7 @@ fun BoxScope.NavigationBarBand(reachesTheScreenEdge: Boolean = true) {
 
 /**
  * The bar's own surface, painted by a view on top of the window's content: the last thing that
- * window draws, so it is over the sheet and over the dim the sheet puts on the app.
+ * window's content draws, so it is over the sheet and under the dim the sheet puts on the app.
  *
  * The view goes in once per window and is never taken out again: the window owns its content view
  * and pulls a child out from under it while the window is detaching, which is a crash. After that it
