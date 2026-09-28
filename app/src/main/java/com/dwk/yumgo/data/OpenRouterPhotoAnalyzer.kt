@@ -9,8 +9,10 @@ import java.net.URL
 import java.time.LocalDate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -49,11 +51,18 @@ class OpenRouterPhotoAnalyzer(
         ensureActive()
         val requestBody = buildRequest(dataUrl)
         val connection = openConnection()
-        // HttpURLConnection's blocking write/read ignores thread interrupts, so abort the
-        // in-flight upload from a completion handler: disconnect() unblocks the socket
-        // immediately on cancel instead of uploading until the server answers or the read
-        // times out. It also fires on normal completion, where disconnect() is a harmless no-op.
-        coroutineContext.job.invokeOnCompletion { connection.disconnect() }
+        // HttpURLConnection's blocking write/read ignores thread interrupts. A watcher child is
+        // cancelled as soon as this scope starts cancelling (while execute() is still blocked on
+        // this thread) and its finally runs on another IO thread, so disconnect() closes the
+        // socket immediately and the upload stops instead of running to the server reply/timeout.
+        val watcher =
+          launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+              awaitCancellation()
+            } finally {
+              connection.disconnect()
+            }
+          }
         try {
           val content = runInterruptible { execute(connection, requestBody) }
           ensureActive()
@@ -64,6 +73,7 @@ class OpenRouterPhotoAnalyzer(
           ensureActive()
           throw error
         } finally {
+          watcher.cancel()
           connection.disconnect()
         }
       }
