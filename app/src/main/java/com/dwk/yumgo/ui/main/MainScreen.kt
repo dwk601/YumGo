@@ -16,6 +16,7 @@ import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dwk.yumgo.R
 import com.dwk.yumgo.data.OfflineFridgeRepository
+import com.dwk.yumgo.data.PhotoAnalysisRepository
 import com.dwk.yumgo.data.PhotoStore
 import com.dwk.yumgo.data.SettingsServices
 import com.dwk.yumgo.ui.photo.PhotoCapture
@@ -74,6 +75,9 @@ fun MainScreen(
         pickPhoto()
       },
       onRemovePhoto = viewModel::onRemovePhoto,
+      onAddPhoto = viewModel::onAddPhoto,
+      onDismissPhotoSource = viewModel::onDismissPhotoSource,
+      onAnalyzePhoto = viewModel::onAnalyzePhoto,
       onOpenSettings = onOpenSettings,
       onPresetSelected = viewModel::onPresetSelected,
     )
@@ -115,6 +119,8 @@ private fun fridgeViewModel(): MainScreenViewModel {
 internal object PhotoStoreHolder {
   @Volatile private var repository: OfflineFridgeRepository? = null
   @Volatile private var photos: PhotoStore? = null
+  /** Test-only analyzer override, installed before activity launch. Null uses the real one. */
+  @Volatile internal var analyzerForTests: PhotoAnalysisRepository? = null
 
   fun repository(context: Context): OfflineFridgeRepository =
     repository ?: synchronized(this) {
@@ -131,6 +137,7 @@ internal object PhotoStoreHolder {
     synchronized(this) {
       repository = null
       photos = null
+      analyzerForTests = null
     }
   }
 }

@@ -7,8 +7,12 @@ import androidx.lifecycle.viewModelScope
 import com.dwk.yumgo.R
 import com.dwk.yumgo.data.FoodPreset
 import com.dwk.yumgo.data.FridgeItem
+import com.dwk.yumgo.data.ExpirySource
 import com.dwk.yumgo.data.FridgeRepository
 import com.dwk.yumgo.data.NewFridgeItem
+import com.dwk.yumgo.data.OpenRouterPhotoAnalyzer
+import com.dwk.yumgo.data.PhotoAnalysisRepository
+import com.dwk.yumgo.data.PhotoAnalysisResult
 import com.dwk.yumgo.data.PhotoStore
 import com.dwk.yumgo.data.PresetRepository
 import com.dwk.yumgo.data.SettingsServices
@@ -48,7 +52,11 @@ class MainScreenViewModel(
   private val draft = MutableStateFlow(readDraft())
   private val cameraOpen = MutableStateFlow(savedState.get<Boolean>(KEY_CAMERA) == true)
   private val displayPaths = MutableStateFlow<Map<String, String>>(emptyMap())
+  private val photoSourceOpen = MutableStateFlow(savedState.get<Boolean>(KEY_PHOTO_SOURCE) == true)
   private val acquisitionActive = AtomicBoolean(cameraOpen.value)
+  private var analysisJob: Job? = null
+  /** Bumped whenever the user edits, the photo changes, or analysis restarts: stale results are dropped. */
+  private var analysisGeneration = 0
   private var reviewRef: String? = null
   private var observeJob: Job? = null
   private val pendingUndo = MutableStateFlow(readPendingUndo())
@@ -65,7 +73,7 @@ class MainScreenViewModel(
   val notices = MutableSharedFlow<FridgeNotice>(extraBufferCapacity = 4)
 
   val uiState: StateFlow<FridgeUiState> =
-    combine(load, errorMessage, query, items, draft, cameraOpen, displayPaths) { values ->
+    combine(load, errorMessage, query, items, draft, cameraOpen, displayPaths, photoSourceOpen) { values ->
       val currentLoad = values[0] as FridgeLoad
       val currentError = values[1] as String?
       val currentQuery = values[2] as String
@@ -73,6 +81,7 @@ class MainScreenViewModel(
       val currentDraft = values[4] as Editable?
       val currentCamera = values[5] as Boolean
       @Suppress("UNCHECKED_CAST") val paths = values[6] as Map<String, String>
+      val sourceOpen = values[7] as Boolean
       FridgeUiState(
         load = currentLoad,
         errorMessage = currentError,
@@ -80,6 +89,7 @@ class MainScreenViewModel(
         items = currentItems.map { it.toUi(paths) },
         draft = currentDraft?.toUi(paths),
         cameraOpen = currentCamera,
+        photoSourceOpen = sourceOpen,
       )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), initialState())
 
@@ -107,8 +117,25 @@ class MainScreenViewModel(
 
   fun onAdd() {
     if (draft.value?.saving == true) return
+    cancelAnalysis()
+    if (photoSourceOpen.value) {
+      photoSourceOpen.value = false
+      savedState[KEY_PHOTO_SOURCE] = false
+    }
     draft.value = Editable(id = null, name = "", quantity = 1, expiryEpochDay = null, photoRef = null)
     persistDraft()
+  }
+
+  /** Add photo button: opens the compact source menu. The chosen source creates the draft. */
+  fun onAddPhoto() {
+    if (draft.value?.saving == true) return
+    photoSourceOpen.value = true
+    savedState[KEY_PHOTO_SOURCE] = true
+  }
+
+  fun onDismissPhotoSource() {
+    photoSourceOpen.value = false
+    savedState[KEY_PHOTO_SOURCE] = false
   }
 
   /**
@@ -160,6 +187,9 @@ class MainScreenViewModel(
     if (current.saving) return
     val nameChanged = updated.name != current.name
     val dateChanged = updated.expiryEpochDay != current.expiryEpochDay
+    // A late analysis result must not overwrite what the user just typed or picked. Analysis
+    // state itself always comes from this ViewModel, never from the UI echo.
+    if (nameChanged || dateChanged) analysisGeneration++
     val nameFromPreset = if (nameChanged) false else current.nameFromPreset
     val presetEpochDay = if (dateChanged) null else current.presetEpochDay
     draft.value =
@@ -172,6 +202,9 @@ class MainScreenViewModel(
         // Nothing of the preset is left once the user has taken over both fields.
         presetId = if (nameFromPreset || presetEpochDay != null) current.presetId else null,
         presetEpochDay = presetEpochDay,
+        // An edited date is the user's own: the AI provenance and its note no longer describe it.
+        expiryProvenance = if (dateChanged) null else current.expiryProvenance,
+        analysisNote = if (dateChanged) null else current.analysisNote,
       )
     persistDraft()
   }
@@ -179,6 +212,7 @@ class MainScreenViewModel(
   fun onDismissEditor() {
     val current = draft.value ?: return
     if (current.saving) return
+    cancelAnalysis()
     val abandoned = current.photoRef
     val committed = current.id?.let { id -> items.value.firstOrNull { it.id == id }?.photoRef }
     draft.value = null
@@ -247,7 +281,16 @@ class MainScreenViewModel(
       persistDraft()
       return
     }
-    draft.value = current.copy(name = name, saving = true, errorMessage = null)
+    // A save in flight owns the draft: a late analysis result must not touch it, and a
+    // cancelled analysis must not leave the progress state stuck on a failed save.
+    cancelAnalysis()
+    draft.value =
+      current.copy(
+        name = name,
+        saving = true,
+        errorMessage = null,
+        analysis = if (current.analysis is PhotoAnalysisUi.Analyzing) PhotoAnalysisUi.Idle else current.analysis,
+      )
     persistDraft()
     viewModelScope.launch {
       val photo = promoteDraftPhoto()
@@ -278,21 +321,48 @@ class MainScreenViewModel(
   fun onRemovePhoto() {
     val current = draft.value ?: return
     if (current.saving) return
+    cancelAnalysis()
     val previous = current.photoRef
-    draft.value = current.copy(photoRef = null, photoMessage = null)
+    draft.value =
+      current.copy(
+        photoRef = null,
+        photoMessage = null,
+        analysis = PhotoAnalysisUi.Idle,
+        expiryProvenance = null,
+        analysisNote = null,
+      )
     persistDraft()
     if (previous != null) viewModelScope.launch { discardIfUnprotected(previous) }
   }
 
   fun onTakePhoto() {
-    if (draft.value == null || draft.value?.saving == true) return
+    if (draft.value?.saving == true) return
+    ensurePhotoDraft()
     acquisitionActive.set(true)
     cameraOpen.value = true
     savedState[KEY_CAMERA] = true
   }
 
   fun onPickStarted() {
+    if (draft.value?.saving == true) return
+    ensurePhotoDraft()
     acquisitionActive.set(true)
+  }
+
+  /**
+   * Guarantees a draft before acquisition starts. A choice from the Add photo sheet creates a
+   * photo-first draft (no keyboard on open); the editor's own photo buttons keep their draft.
+   * Always closes the source sheet.
+   */
+  private fun ensurePhotoDraft() {
+    if (photoSourceOpen.value) {
+      photoSourceOpen.value = false
+      savedState[KEY_PHOTO_SOURCE] = false
+    }
+    if (draft.value == null) {
+      draft.value = Editable(id = null, name = "", quantity = 1, expiryEpochDay = null, photoRef = null, photoFirst = true)
+      persistDraft()
+    }
   }
 
   fun onReviewRef(ref: String?) {
@@ -309,7 +379,21 @@ class MainScreenViewModel(
     when (result) {
       is PhotoAcquisition.Staged -> {
         val previous = current.photoRef
-        draft.value = current.copy(photoRef = result.ref, errorMessage = null, photoMessage = null, saving = false)
+        // A new photo invalidates AI state for the old one. A date the AI suggested no longer
+        // describes this draft and goes; a date the user picked (provenance null) stays theirs.
+        cancelAnalysis()
+        val aiDate = previous != result.ref && current.expiryProvenance != null
+        draft.value =
+          current.copy(
+            photoRef = result.ref,
+            errorMessage = null,
+            photoMessage = null,
+            saving = false,
+            analysis = PhotoAnalysisUi.Idle,
+            expiryEpochDay = if (aiDate) null else current.expiryEpochDay,
+            expiryProvenance = if (previous != result.ref) null else current.expiryProvenance,
+            analysisNote = if (previous != result.ref) null else current.analysisNote,
+          )
         persistDraft()
         if (previous != null && previous != result.ref) {
           viewModelScope.launch { discardIfUnprotected(previous) }
@@ -326,6 +410,77 @@ class MainScreenViewModel(
     }
     if (result !is PhotoAcquisition.Staged) persistDraft()
     if (!cameraOpen.value) viewModelScope.launch { cleanupIfIdle() }
+  }
+
+  /**
+   * Runs cloud photo analysis on the draft's staged photo. Explicit only: nothing uploads until
+   * this is tapped. Guesses fill only undecided fields and stay editable until Save. A late
+   * result is dropped once the photo is replaced or removed, the draft is dismissed, or the
+   * user edits the name or date.
+   */
+  fun onAnalyzePhoto() {
+    val current = draft.value ?: return
+    if (current.saving) return
+    if (current.analysis is PhotoAnalysisUi.Analyzing) return
+    val photoRef = current.photoRef ?: return
+    cancelAnalysis()
+    val generation = ++analysisGeneration
+    draft.value = current.copy(analysis = PhotoAnalysisUi.Analyzing)
+    persistDraft()
+    analysisJob =
+      viewModelScope.launch {
+        val result =
+          try {
+            analyzer().analyze(photoRef)
+          } catch (cancelled: CancellationException) {
+            throw cancelled
+          } catch (error: Throwable) {
+            PhotoAnalysisResult.Failure(error.message.orEmpty())
+          }
+        val editing = draft.value
+        if (editing == null || editing.photoRef != photoRef || editing.analysis !is PhotoAnalysisUi.Analyzing) return@launch
+        if (generation != analysisGeneration) return@launch
+        draft.value =
+          when (result) {
+            is PhotoAnalysisResult.Success -> {
+              // Fill only what the user has not decided, like the preset shortcuts do.
+              val suggestedName = result.name?.trim().orEmpty()
+              val fillName = editing.name.isBlank() && suggestedName.isNotBlank()
+              val suggestedDay = result.expiry?.toEpochDay()
+              val fillDate = editing.expiryEpochDay == null && suggestedDay != null
+              editing.copy(
+                name = if (fillName) suggestedName else editing.name,
+                expiryEpochDay = if (fillDate) suggestedDay else editing.expiryEpochDay,
+                expiryProvenance =
+                  if (!fillDate) {
+                    null
+                  } else {
+                    when (result.expirySource) {
+                      ExpirySource.Detected -> ExpiryProvenance.Detected
+                      ExpirySource.Estimated -> ExpiryProvenance.Estimated
+                      ExpirySource.None -> null
+                    }
+                  },
+                analysisNote = if (fillDate) result.note else null,
+                analysis = PhotoAnalysisUi.Idle,
+              )
+            }
+            is PhotoAnalysisResult.Unavailable -> editing.copy(analysis = PhotoAnalysisUi.Unavailable)
+            // The review copy is localized; analyzer reasons are English-only diagnostics.
+            is PhotoAnalysisResult.Failure -> editing.copy(analysis = PhotoAnalysisUi.Failed(null))
+          }
+        persistDraft()
+      }
+  }
+
+  private fun analyzer(): PhotoAnalysisRepository =
+    PhotoStoreHolder.analyzerForTests ?: OpenRouterPhotoAnalyzer(appContext, photos)
+
+  /** Stops an in-flight analysis and invalidates its late result. */
+  private fun cancelAnalysis() {
+    analysisJob?.cancel()
+    analysisJob = null
+    analysisGeneration++
   }
 
   private fun observeItems() {
@@ -433,6 +588,10 @@ class MainScreenViewModel(
       savedState.remove<String>(KEY_DRAFT_PRESET)
       savedState.remove<Long>(KEY_DRAFT_PRESET_DATE)
       savedState[KEY_DRAFT_PRESET_NAME] = false
+      savedState.remove<String>(KEY_ANALYSIS)
+      savedState.remove<String>(KEY_ANALYSIS_NOTE)
+      savedState.remove<String>(KEY_PROVENANCE)
+      savedState[KEY_PHOTO_FIRST] = false
       return
     }
     if (current.id == null) savedState.remove<String>(KEY_DRAFT_ID) else savedState[KEY_DRAFT_ID] = current.id
@@ -444,10 +603,27 @@ class MainScreenViewModel(
     if (current.presetId == null) savedState.remove<String>(KEY_DRAFT_PRESET) else savedState[KEY_DRAFT_PRESET] = current.presetId
     if (current.presetEpochDay == null) savedState.remove<Long>(KEY_DRAFT_PRESET_DATE) else savedState[KEY_DRAFT_PRESET_DATE] = current.presetEpochDay
     savedState[KEY_DRAFT_PRESET_NAME] = current.nameFromPreset
+    savedState[KEY_ANALYSIS] =
+      when (current.analysis) {
+        is PhotoAnalysisUi.Idle -> "Idle"
+        is PhotoAnalysisUi.Analyzing -> "Analyzing"
+        is PhotoAnalysisUi.Failed -> "Failed"
+        is PhotoAnalysisUi.Unavailable -> "Unavailable"
+      }
+    if (current.analysisNote == null) savedState.remove<String>(KEY_ANALYSIS_NOTE) else savedState[KEY_ANALYSIS_NOTE] = current.analysisNote
+    if (current.expiryProvenance == null) savedState.remove<String>(KEY_PROVENANCE) else savedState[KEY_PROVENANCE] = current.expiryProvenance.name
+    savedState[KEY_PHOTO_FIRST] = current.photoFirst
   }
 
   private fun readDraft(): Editable? {
     if (savedState.get<Boolean>(KEY_DRAFT_OPEN) != true) return null
+    // A recreated Analyzing state never re-uploads on its own: it rests at Idle until tapped again.
+    val analysis =
+      when (savedState.get<String>(KEY_ANALYSIS)) {
+        "Failed" -> PhotoAnalysisUi.Failed(null)
+        "Unavailable" -> PhotoAnalysisUi.Unavailable
+        else -> PhotoAnalysisUi.Idle
+      }
     return Editable(
       id = savedState.get<String>(KEY_DRAFT_ID),
       name = savedState.get<String>(KEY_DRAFT_NAME).orEmpty(),
@@ -458,6 +634,10 @@ class MainScreenViewModel(
       presetId = savedState.get<String>(KEY_DRAFT_PRESET),
       presetEpochDay = savedState.get<Long>(KEY_DRAFT_PRESET_DATE),
       nameFromPreset = savedState[KEY_DRAFT_PRESET_NAME] ?: false,
+      analysis = analysis,
+      expiryProvenance = savedState.get<String>(KEY_PROVENANCE)?.let { runCatching { ExpiryProvenance.valueOf(it) }.getOrNull() },
+      analysisNote = savedState.get<String>(KEY_ANALYSIS_NOTE),
+      photoFirst = savedState[KEY_PHOTO_FIRST] ?: false,
     )
   }
 
@@ -486,6 +666,7 @@ class MainScreenViewModel(
       query = query.value,
       draft = editing?.toUi(emptyMap()),
       cameraOpen = cameraOpen.value,
+      photoSourceOpen = photoSourceOpen.value,
     )
   }
 
@@ -513,6 +694,10 @@ class MainScreenViewModel(
       // The editor's hint has to tell the truth about what a tap would do to the name, and only
       // this flag knows whether a name that reads like a preset's own is the user's.
       nameFromPreset = nameFromPreset,
+      analysis = analysis,
+      expiryProvenance = expiryProvenance,
+      analysisNote = analysisNote,
+      photoFirst = photoFirst,
     )
 
   private data class Editable(
@@ -529,6 +714,14 @@ class MainScreenViewModel(
     val presetEpochDay: Long? = null,
     /** True while the draft still carries the preset's own name, so a tap may replace it. */
     val nameFromPreset: Boolean = false,
+    /** Review state for the photo AI section. Restored Analyzing becomes Idle (no re-upload). */
+    val analysis: PhotoAnalysisUi = PhotoAnalysisUi.Idle,
+    /** Set when an AI suggestion filled the expiry; cleared when the user edits it. */
+    val expiryProvenance: ExpiryProvenance? = null,
+    /** Assumptions behind an estimate, shown with the provenance when present. */
+    val analysisNote: String? = null,
+    /** True for drafts started from the Add photo button; suppresses the name autofocus. */
+    val photoFirst: Boolean = false,
   )
 
   private companion object {
@@ -544,6 +737,11 @@ class MainScreenViewModel(
     const val KEY_DRAFT_PRESET = "draft_preset"
     const val KEY_DRAFT_PRESET_DATE = "draft_preset_date"
     const val KEY_DRAFT_PRESET_NAME = "draft_preset_name"
+    const val KEY_PHOTO_SOURCE = "photo_source_open"
+    const val KEY_ANALYSIS = "draft_analysis"
+    const val KEY_ANALYSIS_NOTE = "draft_analysis_note"
+    const val KEY_PROVENANCE = "draft_provenance"
+    const val KEY_PHOTO_FIRST = "draft_photo_first"
     const val KEY_UNDO_ID = "undo_id"
     const val KEY_UNDO_NAME = "undo_name"
   }
