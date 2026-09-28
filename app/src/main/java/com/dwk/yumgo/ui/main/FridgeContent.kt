@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
@@ -43,6 +44,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
@@ -55,8 +57,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
@@ -92,6 +99,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -192,12 +200,26 @@ private fun FridgeScaffold(
     topBar = { FridgeHeader(state = state, useSoon = useSoon, callbacks = callbacks) },
     floatingActionButton = {
       val addLabel = stringResource(R.string.fridge_add)
-      ExtendedFloatingActionButton(
-        onClick = callbacks.onAdd,
-        modifier = Modifier.semantics { contentDescription = addLabel },
-        icon = { Icon(FridgePlus, contentDescription = null) },
-        text = { Text(addLabel) },
-      )
+      val addPhotoLabel = stringResource(R.string.photo_ai_add_photo)
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        FloatingActionButton(
+          onClick = callbacks.onAddPhoto,
+          modifier = Modifier.testTag("addPhotoButton").semantics { contentDescription = addPhotoLabel },
+          containerColor = MaterialTheme.colorScheme.secondaryContainer,
+          contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ) {
+          Icon(FridgePhoto, contentDescription = null)
+        }
+        ExtendedFloatingActionButton(
+          onClick = callbacks.onAdd,
+          modifier = Modifier.semantics { contentDescription = addLabel },
+          icon = { Icon(FridgePlus, contentDescription = null) },
+          text = { Text(addLabel) },
+        )
+      }
     },
   ) { innerPadding ->
     AnimatedContent(
@@ -269,6 +291,70 @@ private fun FridgeScaffold(
               }
             }
           }
+      }
+    }
+  }
+  if (state.photoSourceOpen) {
+    PhotoSourceSheet(state = state, callbacks = callbacks)
+  }
+}
+
+/**
+ * Compact photo source menu. Two large targets that wrap at large text, with the
+ * permission-free picker called out. Dismisses through [FridgeCallbacks.onDismissPhotoSource];
+ * the camera and picker choices go through the existing photo callbacks so the caller stages
+ * the file and opens a review draft.
+ */
+@Composable
+private fun PhotoSourceSheet(state: FridgeUiState, callbacks: FridgeCallbacks) {
+  val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  ModalBottomSheet(
+    onDismissRequest = callbacks.onDismissPhotoSource,
+    sheetState = sheetState,
+    shape = MaterialTheme.shapes.extraLarge,
+    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    contentColor = MaterialTheme.colorScheme.onSurface,
+    dragHandle = { BottomSheetDefaults.DragHandle() },
+    contentWindowInsets = { BottomSheetDefaults.windowInsets.only(WindowInsetsSides.Top) },
+  ) {
+    Column(
+      Modifier.fillMaxWidth()
+        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+        .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 24.dp),
+    ) {
+      Text(text = stringResource(R.string.photo_ai_source_title), style = MaterialTheme.typography.headlineSmall)
+      Text(
+        text = stringResource(R.string.photo_ai_source_body),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+      )
+      Spacer(Modifier.height(12.dp))
+      OutlinedButton(
+        onClick = callbacks.onTakePhoto,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("photoSourceCamera"),
+      ) {
+        Text(stringResource(R.string.photo_ai_source_camera))
+      }
+      Spacer(Modifier.height(8.dp))
+      OutlinedButton(
+        onClick = callbacks.onPickPhoto,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("photoSourcePicker"),
+      ) {
+        Text(stringResource(R.string.photo_ai_source_picker))
+      }
+      Text(
+        text = stringResource(R.string.photo_ai_source_picker_note),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 8.dp),
+      )
+      Spacer(Modifier.height(8.dp))
+      TextButton(
+        onClick = callbacks.onDismissPhotoSource,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+      ) {
+        Text(stringResource(R.string.photo_ai_source_dismiss))
       }
     }
   }
@@ -697,6 +783,7 @@ internal val FridgeDelete: ImageVector by lazy { fridgeIcon("Delete") { delete()
 internal val FridgeCheck: ImageVector by lazy { fridgeIcon("Check") { check() } }
 private val FridgeSearch: ImageVector by lazy { fridgeIcon("Search") { search() } }
 private val FridgeSettings: ImageVector by lazy { fridgeIcon("Settings") { settings() } }
+internal val FridgePhoto: ImageVector by lazy { fridgeIcon("Photo") { photo() } }
 
 private fun fridgeIcon(name: String, draw: androidx.compose.ui.graphics.vector.PathBuilder.() -> Unit): ImageVector =
   ImageVector.Builder(name = name, defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
@@ -819,6 +906,12 @@ private fun androidx.compose.ui.graphics.vector.PathBuilder.delete() {
   lineTo(19f, 6f)
   lineTo(19f, 4f)
   close()
+}
+
+/** Camera silhouette: a body with a viewfinder bump, solid like the other icons. */
+private fun androidx.compose.ui.graphics.vector.PathBuilder.photo() {
+  rectangle(3f, 7f, 21f, 17f)
+  rectangle(8f, 4f, 16f, 7.5f)
 }
 
 /** Three labelled sliders. Same-direction rectangles merge under the non-zero fill rule. */

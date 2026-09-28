@@ -24,6 +24,8 @@ data class FridgeUiState(
   val draft: ItemDraft? = null,
   /** When true the fridge and editor are replaced by the camera slot. */
   val cameraOpen: Boolean = false,
+  /** When true the compact photo source menu is shown. */
+  val photoSourceOpen: Boolean = false,
 )
 
 enum class FridgeLoad {
@@ -67,6 +69,20 @@ fun List<FoodPreset>.completing(typed: String): List<FoodPreset> {
   return filter { it.completes(name) }
 }
 
+/** Where an expiry suggestion came from, when an AI suggestion was applied. */
+enum class ExpiryProvenance {
+  Detected,
+  Estimated,
+}
+
+/** Photo analysis state for a draft. Success lands on the draft fields with [ItemDraft.expiryProvenance] set. */
+sealed interface PhotoAnalysisUi {
+  data object Idle : PhotoAnalysisUi
+  data object Analyzing : PhotoAnalysisUi
+  data class Failed(val message: String? = null) : PhotoAnalysisUi
+  data object Unavailable : PhotoAnalysisUi
+}
+
 /** Controlled editor fields. Photo changes go through [FridgeCallbacks], not a copied draft. */
 data class ItemDraft(
   val id: String?,
@@ -89,6 +105,12 @@ data class ItemDraft(
    * tap on another preset may replace that name, which is what the shortcut hint says it does.
    */
   val nameFromPreset: Boolean = false,
+  /** Photo AI state. Stays [PhotoAnalysisUi.Idle] for typed drafts without a photo. */
+  val analysis: PhotoAnalysisUi = PhotoAnalysisUi.Idle,
+  /** Set when an AI suggestion filled the expiry. Cleared when the user edits it. */
+  val expiryProvenance: ExpiryProvenance? = null,
+  /** Assumptions behind an estimate, shown with the provenance when present. */
+  val analysisNote: String? = null,
 )
 
 /**
@@ -110,6 +132,12 @@ data class FridgeCallbacks(
   val onTakePhoto: () -> Unit,
   val onPickPhoto: () -> Unit,
   val onRemovePhoto: () -> Unit,
+  /** Opens the compact photo source menu. */
+  val onAddPhoto: () -> Unit = {},
+  /** Closes the photo source menu. */
+  val onDismissPhotoSource: () -> Unit = {},
+  /** Runs cloud photo analysis on the draft photo. Suggestions stay editable until Save. */
+  val onAnalyzePhoto: () -> Unit = {},
   /** Header action that pushes the settings destination. */
   val onOpenSettings: () -> Unit = {},
   /** Fills the new draft from a premade food. Saves nothing by itself. */
