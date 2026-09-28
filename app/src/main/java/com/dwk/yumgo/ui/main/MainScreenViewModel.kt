@@ -187,9 +187,10 @@ class MainScreenViewModel(
     if (current.saving) return
     val nameChanged = updated.name != current.name
     val dateChanged = updated.expiryEpochDay != current.expiryEpochDay
-    // A late analysis result must not overwrite what the user just typed or picked. Analysis
-    // state itself always comes from this ViewModel, never from the UI echo.
-    if (nameChanged || dateChanged) analysisGeneration++
+    // A late result never overwrites these edits: it fills only blank names and null dates.
+    // Bumping the generation here would strand the progress state with no retry, so user
+    // typing during analysis is protected by the fill guards instead. Analysis state itself
+    // always comes from this ViewModel, never from the UI echo.
     val nameFromPreset = if (nameChanged) false else current.nameFromPreset
     val presetEpochDay = if (dateChanged) null else current.presetEpochDay
     draft.value =
