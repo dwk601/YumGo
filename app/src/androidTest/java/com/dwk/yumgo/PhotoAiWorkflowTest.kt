@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.net.Uri
 import android.provider.MediaStore
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasSetTextAction
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -258,8 +260,11 @@ class PhotoAiWorkflowTest {
   @Test
   fun pickerPhoto_flowsToSuggestionsAndSave() {
     revokeCamera()
-    val displayName = "photoai-apple.jpg"
-    val image = seedGalleryImage(displayName, "photo_ai/apple.jpg")
+    val images =
+      listOf(
+        seedGalleryImage("photoai-apple.jpg", "photo_ai/apple.jpg"),
+        seedGalleryImage("photoai-milk.jpg", "photo_ai/milk_carton.jpg"),
+      )
     try {
       composeRule.onNodeWithTag("addPhotoButton").performClick()
       composeRule.waitUntil(10_000) { nodeCount(hasTestTag("photoSourcePicker")) > 0 }
@@ -287,7 +292,8 @@ class PhotoAiWorkflowTest {
       composeRule.onNodeWithText("Save").performClick()
       composeRule.waitUntil(10_000) { nodeCount(hasText("Whole Milk")) > 0 }
     } finally {
-      InstrumentationRegistry.getInstrumentation().targetContext.contentResolver.delete(image, null, null)
+      val resolver = InstrumentationRegistry.getInstrumentation().targetContext.contentResolver
+      images.forEach { resolver.delete(it, null, null) }
     }
   }
 
@@ -340,15 +346,96 @@ class PhotoAiWorkflowTest {
     fake.gate?.complete(Unit)
     composeRule.waitForIdle()
     // Fresh ViewModel: Idle offers Analyze again, so one explicit tap finishes the flow.
-    // Retained ViewModel: the single gated call lands on its own.
-    if (nodeCount(hasTestTag("analyzePhotoButton")) > 0) {
+    // Retained ViewModel: the single gated call lands on its own; skip the tap then.
+    if (nodeCount(hasTestTag("analyzePhotoButton")) > 0 &&
+      nodeCount(hasText("Detected expiry")) == 0
+    ) {
       composeRule.onNodeWithTag("analyzePhotoButton").performClick()
     }
     composeRule.waitUntil(15_000) { nodeCount(hasText("Detected expiry")) > 0 }
+    assertTrue("Analyzer re-uploaded: ${fake.seenRefs}", fake.calls <= 2)
     assertTrue("Analyzer got ${fake.seenRefs}", fake.seenRefs.all { it.startsWith("staged/") })
 
     composeRule.onNodeWithText("Save").performClick()
     composeRule.waitUntil(10_000) { nodeCount(hasText("Whole Milk")) > 0 }
+  }
+
+  /**
+   * Inset/keyboard clearance on the photo review draft. A photo-first draft raises no IME on
+   * its own; with the keyboard up the focused field, Analyze, and Save stay above the IME
+   * top, and with the keyboard down they stay above the navigation-bar inset.
+   */
+  @Test
+  fun reviewKeyboardClearance_actionsStayAboveImeAndNavBar() {
+    grantCamera()
+    capturePhotoFirstDraft()
+
+    // Photo-first review does not force the keyboard: nothing focused it.
+    composeRule.waitForIdle()
+    Thread.sleep(1_500)
+    assertEquals(null, imeTop())
+
+    // Keyboard down: actions clear the navigation bar (or the screen bottom under gesture nav).
+    val navTop = navBarTop()?.toFloat() ?: screenHeight().toFloat()
+    assertTrue(
+      "Save below nav inset",
+      composeRule.onNodeWithText("Save").fetchSemanticsNode().boundsInWindow.bottom <= navTop,
+    )
+    assertTrue(
+      "Analyze below nav inset",
+      composeRule.onNodeWithTag("analyzePhotoButton").fetchSemanticsNode().boundsInWindow.bottom <= navTop,
+    )
+
+    // Keyboard up: tapping Name raises it; field, Analyze, and Save stay above the IME top.
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performClick()
+    awaitIme()
+    val ime = imeTop()
+    assertTrue("IME did not open", ime != null && ime > 0)
+    assertTrue(
+      "Name field under IME",
+      composeRule.onNode(hasSetTextAction() and hasText("Name"))
+        .fetchSemanticsNode().boundsInWindow.bottom <= ime!!.toFloat(),
+    )
+    composeRule.onNodeWithTag("analyzePhotoButton").performScrollTo()
+    assertTrue(
+      "Analyze under IME",
+      composeRule.onNodeWithTag("analyzePhotoButton")
+        .fetchSemanticsNode().boundsInWindow.bottom <= ime.toFloat(),
+    )
+    composeRule.onNodeWithText("Save").performScrollTo()
+    assertTrue(
+      "Save under IME",
+      composeRule.onNodeWithText("Save").fetchSemanticsNode().boundsInWindow.bottom <= ime.toFloat(),
+    )
+  }
+
+  /**
+   * Removing the photo mid-analysis drops the late result: the analysis section goes away
+   * with the photo, and the draft saves by typing.
+   */
+  @Test
+  fun removePhotoDuringAnalysis_dropsLateResult() {
+    grantCamera()
+    val fake = FakePhotoAnalyzer(PhotoAiTestFixtures.detected())
+    fake.gate = CompletableDeferred()
+    capturePhotoFirstDraft()
+
+    PhotoStoreHolder.analyzerForTests = fake
+    composeRule.onNodeWithTag("analyzePhotoButton").performClick()
+    composeRule.waitUntil(10_000) { nodeCount(hasTestTag("analysisProgress")) > 0 }
+    composeRule.onNodeWithText("Remove photo").performClick()
+    fake.gate?.complete(Unit)
+    composeRule.waitForIdle()
+    composeRule.waitUntil(10_000) { nodeCount(hasTestTag("analysisProgress")) == 0 }
+    // The photo is gone, so the whole analysis section (button, error, provenance) is gone.
+    assertEquals(0, nodeCount(hasTestTag("analyzePhotoButton")))
+    assertEquals(0, nodeCount(hasTestTag("expiryProvenance")))
+    assertEquals(0, nodeCount(hasText("Remove photo")))
+
+    composeRule.onNode(hasSetTextAction() and hasText("Name")).performTextInput("Removed Plum")
+    composeRule.onNodeWithText("Save").performClick()
+    composeRule.waitUntil(10_000) { nodeCount(hasText("Removed Plum")) > 0 }
+    assertEquals(null, readPhotoRef("Removed Plum"))
   }
 
   /**
@@ -383,6 +470,9 @@ class PhotoAiWorkflowTest {
   @Test
   fun darkMode_reviewKeepsContentVisible() {
     grantCamera()
+    // 0 = auto, 1 = no, 2 = yes; restore the prior mode afterwards.
+    val priorNight = shell("settings get secure ui_night_mode").trim().ifEmpty { "0" }
+    val restoreNight = mapOf("0" to "auto", "1" to "no", "2" to "yes")[priorNight] ?: "auto"
     try {
       shell("cmd uimode night yes")
       composeRule.waitForIdle()
@@ -398,7 +488,7 @@ class PhotoAiWorkflowTest {
       composeRule.onNodeWithText("Save").assertIsDisplayed().performClick()
       composeRule.waitUntil(10_000) { nodeCount(hasText("Whole Milk")) > 0 }
     } finally {
-      shell("cmd uimode night auto")
+      shell("cmd uimode night $restoreNight")
       composeRule.waitForIdle()
     }
   }
@@ -436,6 +526,38 @@ class PhotoAiWorkflowTest {
     }
     return uri
   }
+
+  // --- IME / nav-bar insets ---
+
+  /** Top of the on-screen keyboard in screen pixels, or null when it is down. */
+  private fun imeTop(): Int? {
+    val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+    return automation.windows
+      .firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+      ?.let { window -> Rect().also(window::getBoundsInScreen).takeIf { it.height() > 0 }?.top }
+  }
+
+  private fun awaitIme() {
+    composeRule.waitUntil(10_000) { imeTop() != null }
+  }
+
+  /**
+   * Top of the bottom system bar (navigation bar or gesture handle), or null when no system
+   * window sits at the screen bottom. The status bar is also TYPE_SYSTEM, so only a window
+   * anchored to the bottom half counts.
+   */
+  private fun navBarTop(): Int? {
+    val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+    val displayHeight = screenHeight()
+    return automation.windows
+      .filter { it.type == AccessibilityWindowInfo.TYPE_SYSTEM }
+      .map { window -> Rect().also(window::getBoundsInScreen) }
+      .firstOrNull { it.height() > 0 && it.bottom >= displayHeight && it.top > displayHeight / 2 }
+      ?.top
+  }
+
+  private fun screenHeight(): Int =
+    InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.heightPixels
 
   // --- Permissions, system UI, node counts ---
 
